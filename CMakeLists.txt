@@ -24,7 +24,8 @@ target_sources(DevTest PRIVATE
 target_compile_definitions(DevTest PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
-    JUCE_VST3_CAN_REPLACE_VST2=0)
+    JUCE_VST3_CAN_REPLACE_VST2=0
+    JUCE_ASIO=1)
 
 target_link_libraries(DevTest
     PRIVATE juce::juce_audio_utils
