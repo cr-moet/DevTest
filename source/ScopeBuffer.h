@@ -5,15 +5,15 @@
 #include <memory>
 
 //==============================================================================
-// Lock-freier Ringpuffer fuer zwei Oszilloskop-Kanaele.
-// Der Audio-Thread schreibt (push), der GUI-Thread liest (getL/getR).
-// Kein Lock, keine Speicherallokation im Audio-Thread.
+// Lock-free ring buffer for the two scope/FFT channels.
+// The audio thread writes (push), the GUI thread reads (getL/getR).
+// No locks and no memory allocation on the audio thread.
 //==============================================================================
 class ScopeBuffer
 {
 public:
-    // 2^19 Samples pro Kanal: reicht fuer 1 s Fensterbreite bei 192 kHz
-    // plus Suchbereich fuer den Trigger.
+    // 2^19 samples per channel: enough for a 1 s window at 192 kHz
+    // plus the search range for the trigger.
     static constexpr int size = 1 << 19;
     static constexpr uint64_t mask = (uint64_t) size - 1;
 
@@ -33,7 +33,7 @@ public:
         }
     }
 
-    // Nur aus dem Audio-Thread aufrufen
+    // Call from the audio thread only
     inline void push (float l, float r) noexcept
     {
         const auto w = writePos.load (std::memory_order_relaxed);
@@ -42,7 +42,7 @@ public:
         writePos.store (w + 1, std::memory_order_release);
     }
 
-    // Gesamtzahl der bisher geschriebenen Samples (laeuft immer weiter)
+    // Total number of samples written so far (keeps counting up)
     uint64_t getWritePos() const noexcept   { return writePos.load (std::memory_order_acquire); }
 
     float getL (uint64_t index) const noexcept { return left[index & mask].load (std::memory_order_relaxed); }

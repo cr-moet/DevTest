@@ -4,7 +4,7 @@
 #include "ScopeBuffer.h"
 
 //==============================================================================
-// Parameter-IDs an einer Stelle, damit Processor und Editor dieselben nutzen
+// Parameter IDs in one place, so processor and editor use the same ones
 //==============================================================================
 namespace ParamIDs
 {
@@ -17,11 +17,17 @@ namespace ParamIDs
     inline constexpr const char* genFreq      = "genFreq";
     inline constexpr const char* genLevel     = "genLevel";
     inline constexpr const char* genOutput    = "genOutput";
+    inline constexpr const char* genWave      = "genWave";
+    inline constexpr const char* fftSize      = "fftSize";
+    inline constexpr const char* fftWindow    = "fftWindow";
+    inline constexpr const char* fftAverage   = "fftAverage";
+    inline constexpr const char* fftRange     = "fftRange";
 }
 
-// Reihenfolge muss zu den Choice-Parametern passen
+// Order must match the choice parameters
 enum class ScopeSource { off = 0, inputL, inputR, generator };
 enum class GenOutput   { off = 0, left, right, both };
+enum class Waveform    { sine = 0, saw, triangle, square };
 
 //==============================================================================
 class AudioPluginAudioProcessor final : public juce::AudioProcessor
@@ -65,7 +71,7 @@ public:
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
-    // Zeiger auf die Parameterwerte (thread-sicher lesbar)
+    // Pointers to the parameter values (thread-safe to read)
     std::atomic<float>* scopeSrcLParam  = nullptr;
     std::atomic<float>* scopeSrcRParam  = nullptr;
     std::atomic<float>* passThroughParam = nullptr;
@@ -73,8 +79,9 @@ private:
     std::atomic<float>* genFreqParam    = nullptr;
     std::atomic<float>* genLevelParam   = nullptr;
     std::atomic<float>* genOutputParam  = nullptr;
+    std::atomic<float>* genWaveParam    = nullptr;
 
-    // Sinusgenerator
+    // Signal generator (phase 0..1)
     double phase = 0.0;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> smoothedFreq { 1000.0f };
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear>         smoothedGain { 0.0f };

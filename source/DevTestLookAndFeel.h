@@ -3,20 +3,85 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 //==============================================================================
-// Farben von DevTest
+// DevTest colours
 //==============================================================================
 namespace DevTestColours
 {
-    inline const juce::Colour background { 0xfff2ebd6 };   // Hintergrund
-    inline const juce::Colour text       { 0xff292929 };   // Schrift
-    inline const juce::Colour accent     { 0xffd52925 };   // Spezielle Elemente
-    inline const juce::Colour traceL     { 0xff292929 };   // Oszi Kanal L
-    inline const juce::Colour traceR     { 0xffd52925 };   // Oszi Kanal R
+    inline const juce::Colour background { 0xfff2ebd6 };   // background
+    inline const juce::Colour text       { 0xff292929 };   // text
+    inline const juce::Colour accent     { 0xffd52925 };   // special elements
+    inline const juce::Colour traceL     { 0xff292929 };   // scope channel L
+    inline const juce::Colour traceR     { 0xffd52925 };   // scope channel R
 
-    // Abgeleitete Toene fuer Flaechen und Raster
+    // Derived tones for panels and grid lines
     inline const juce::Colour panel      = background.darker (0.06f);
     inline const juce::Colour grid       = text.withAlpha (0.12f);
     inline const juce::Colour gridStrong = text.withAlpha (0.35f);
+}
+
+//==============================================================================
+// Background texture: normally distributed (Gaussian) white noise.
+// Each pixel is white for positive and black for negative noise values, with an
+// alpha proportional to the magnitude, so the average brightness of the
+// background colour stays unchanged. The tile is drawn repeatedly with
+// 'noiseOpacity' over the background.
+//==============================================================================
+namespace NoiseTexture
+{
+    inline constexpr float noiseOpacity = 0.042f;   // overall strength of the noise layer
+    inline constexpr int   tileSize     = 512;     // large enough that repetition is not visible
+
+    inline juce::Image createTile()
+    {
+        juce::Image tile (juce::Image::ARGB, tileSize, tileSize, true);
+        juce::Random random (0x5eed);  // fixed seed -> same texture on every start
+
+        // Box-Muller transform: two uniform random numbers -> two Gaussian values
+        const auto nextGaussianPair = [&random] (float& a, float& b)
+        {
+            const float u1 = juce::jmax (1.0e-7f, random.nextFloat());
+            const float u2 = random.nextFloat();
+            const float r  = std::sqrt (-2.0f * std::log (u1));
+            a = r * std::cos (juce::MathConstants<float>::twoPi * u2);
+            b = r * std::sin (juce::MathConstants<float>::twoPi * u2);
+        };
+
+        juce::Image::BitmapData pixels (tile, juce::Image::BitmapData::writeOnly);
+
+        for (int y = 0; y < tileSize; ++y)
+        {
+            for (int x = 0; x < tileSize; x += 2)
+            {
+                float n[2];
+                nextGaussianPair (n[0], n[1]);
+
+                for (int k = 0; k < 2; ++k)
+                {
+                    // standard deviation 1 -> alpha 0.5, clipped at 3 sigma
+                    const float alpha = juce::jlimit (0.0f, 1.0f, std::abs (n[k]) * 0.5f);
+                    const auto colour = (n[k] >= 0.0f ? juce::Colours::white : juce::Colours::black).withAlpha (alpha);
+                    pixels.setPixelColour (x + k, y, colour);
+                }
+            }
+        }
+
+        return tile;
+    }
+
+    // Shared tile, created once on first use
+    inline const juce::Image& getTile()
+    {
+        static const juce::Image tile = createTile();
+        return tile;
+    }
+
+    // Fills 'area' with the noise texture at 'noiseOpacity'
+    inline void draw (juce::Graphics& g, juce::Rectangle<int> area)
+    {
+        juce::Graphics::ScopedSaveState save (g);
+        g.setTiledImageFill (getTile(), 0, 0, noiseOpacity);
+        g.fillRect (area);
+    }
 }
 
 //==============================================================================

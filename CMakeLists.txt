@@ -27,8 +27,12 @@ target_compile_definitions(DevTest PUBLIC
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_ASIO=1)
 
+# Source files are UTF-8
+target_compile_options(DevTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
 target_link_libraries(DevTest
     PRIVATE juce::juce_audio_utils
+            juce::juce_dsp
     PUBLIC  juce::juce_recommended_config_flags
             juce::juce_recommended_lto_flags
             juce::juce_recommended_warning_flags)

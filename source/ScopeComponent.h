@@ -5,8 +5,9 @@
 #include "DevTestLookAndFeel.h"
 
 //==============================================================================
-// Oszilloskop-Anzeige: 10 Divisionen horizontal, 8 vertikal, +/-1.0 = 0 dBFS.
-// Liest die Samples aus dem Ringpuffer des Processors (60 Bilder/s).
+// Oscilloscope display: 10 horizontal divisions, 8 vertical, +/-1.0 = 0 dBFS.
+// Reads samples from the processor's ring buffer (60 frames per second).
+// The component is transparent so the editor's background texture shows through.
 //==============================================================================
 class ScopeComponent final : public juce::Component,
                              private juce::Timer
@@ -23,15 +24,13 @@ public:
         srcLParam       = processor.apvts.getRawParameterValue (ParamIDs::scopeSourceL);
         srcRParam       = processor.apvts.getRawParameterValue (ParamIDs::scopeSourceR);
 
-        setOpaque (true);
+        setOpaque (false);
         startTimerHz (60);
     }
 
     void paint (juce::Graphics& g) override
     {
         using namespace DevTestColours;
-
-        g.fillAll (background);
 
         const auto plot = getPlotArea();
         drawGrid (g, plot);
@@ -59,10 +58,13 @@ private:
 
     void timerCallback() override
     {
-        const double sr      = processor.getCurrentSampleRate();
+        if (! isShowing())
+            return; // view not visible (other tab selected) -> skip all work
+
+        const double sr       = processor.getCurrentSampleRate();
         const double msPerDiv = (double) timePerDivParam->load();
-        const int windowLen  = juce::jlimit (2, ScopeBuffer::size / 2,
-                                             (int) std::round (msPerDiv * 0.001 * numDivsX * sr));
+        const int windowLen   = juce::jlimit (2, ScopeBuffer::size / 2,
+                                              (int) std::round (msPerDiv * 0.001 * numDivsX * sr));
 
         showL = juce::roundToInt (srcLParam->load()) != (int) ScopeSource::off;
         showR = juce::roundToInt (srcRParam->load()) != (int) ScopeSource::off;
@@ -71,9 +73,9 @@ private:
         const auto writePos = buf.getWritePos();
 
         if (writePos < (uint64_t) windowLen + 4)
-            return; // noch nicht genug Daten
+            return; // not enough data yet
 
-        // ---------------- Pegelmessung (letzte 300 ms) ----------------
+        // ---------------- Level metering (last 300 ms) ----------------
         {
             const auto measureLen = std::min<uint64_t> (writePos, (uint64_t) std::max (1.0, sr * 0.3));
             double sumL = 0.0, sumR = 0.0;
@@ -95,7 +97,7 @@ private:
         }
 
         // ---------------- Trigger ----------------
-        // Startpunkt ohne Trigger: einfach die neuesten Samples
+        // Start position without trigger: simply the most recent samples
         uint64_t start = writePos - (uint64_t) windowLen - 2;
         fracOffset = 0.0f;
         triggered = false;
@@ -105,23 +107,23 @@ private:
             const bool useL = showL;
             const auto get  = [&buf, useL] (uint64_t i) { return useL ? buf.getL (i) : buf.getR (i); };
 
-            // Suchbereich: mindestens 100 ms bzw. eine Fensterbreite zurueck
+            // Search range: at least 100 ms or one window width back
             const auto available  = std::min<uint64_t> (writePos, (uint64_t) ScopeBuffer::size - 1);
             const auto latestIdx  = writePos - (uint64_t) windowLen - 1;
             const auto searchLen  = std::min<uint64_t> (available - (uint64_t) windowLen - 2,
                                                         (uint64_t) std::max (sr * 0.1, (double) windowLen));
             const auto searchFrom = latestIdx - searchLen;
 
-            // Hysterese passend zum Signalpegel (5 % vom Spitzenwert), damit Rauschen
-            // am Nulldurchgang keine Fehltrigger ausloest
+            // Hysteresis relative to the signal level (5 % of peak), so that noise
+            // around the zero crossing does not cause false triggers
             float peak = 0.0f;
             for (uint64_t i = searchFrom; i <= latestIdx; ++i)
                 peak = std::max (peak, std::abs (get (i)));
 
             const float hysteresis = std::max (0.0005f, peak * 0.05f);
 
-            // Schmitt-Trigger vorwaerts: "scharf" unterhalb -Hysterese,
-            // ausloesen beim naechsten Durchgang durch 0 nach oben.
+            // Forward Schmitt trigger: arm below -hysteresis,
+            // fire on the next upward crossing through zero.
             bool armed = false;
             for (uint64_t i = searchFrom + 1; i <= latestIdx; ++i)
             {
@@ -133,8 +135,8 @@ private:
 
                 if (armed && prev < 0.0f && cur >= 0.0f)
                 {
-                    // Nulldurchgang liegt zwischen i-1 und i: genau interpolieren,
-                    // damit das Bild nicht um ein ganzes Sample hin- und herspringt
+                    // The zero crossing lies between i-1 and i: interpolate it exactly
+                    // so the display does not jump back and forth by a whole sample
                     start      = i - 1;
                     fracOffset = prev / (prev - cur);
                     triggered  = true;
@@ -143,7 +145,7 @@ private:
             }
         }
 
-        // windowLen + 2 Samples, damit das Bild trotz Subsample-Versatz bis zum Rand reicht
+        // windowLen + 2 samples, so the trace reaches the edge despite the sub-sample offset
         samplesL.resize ((size_t) windowLen + 2);
         samplesR.resize ((size_t) windowLen + 2);
 
@@ -153,9 +155,8 @@ private:
             samplesR[(size_t) i] = buf.getR (start + (uint64_t) i);
         }
 
-        currentWindowLen = windowLen;
-
-        currentMsPerDiv = msPerDiv;
+        currentWindowLen  = windowLen;
+        currentMsPerDiv   = msPerDiv;
         currentSampleRate = sr;
         repaint();
     }
@@ -182,7 +183,7 @@ private:
             g.drawLine (plot.getX(), y, plot.getRight(), y, 1.0f);
         }
 
-        // Feine Teilstriche auf den Mittelachsen
+        // Fine tick marks on the centre axes
         g.setColour (gridStrong);
         const float cx = plot.getCentreX(), cy = plot.getCentreY();
 
@@ -198,7 +199,7 @@ private:
             g.drawLine (cx - 3.0f, y, cx + 3.0f, y, 1.0f);
         }
 
-        // Amplitudenbeschriftung links
+        // Amplitude labels on the left
         g.setColour (text.withAlpha (0.7f));
         g.setFont (juce::Font (juce::FontOptions (11.0f)));
 
@@ -230,8 +231,8 @@ private:
 
         if (windowLen <= width * 2)
         {
-            // Wenige Samples: Linie durch alle Punkte, um den Subsample-Versatz
-            // des Triggers verschoben -> ruhiges Bild
+            // Few samples: line through every point, shifted by the trigger's
+            // sub-sample offset -> stable picture
             juce::Path path;
             const float samplesToX = plot.getWidth() / (float) windowLen;
 
@@ -246,7 +247,7 @@ private:
         }
         else
         {
-            // Viele Samples: pro Pixelspalte Min/Max zeichnen (zeigt auch Spitzen korrekt)
+            // Many samples: draw min/max per pixel column (keeps peaks visible)
             const int n = windowLen;
             float lastValue = data[0];
 
@@ -285,17 +286,17 @@ private:
         g.setFont (juce::Font (juce::FontOptions (12.0f)));
         g.setColour (text);
 
-        juce::String timeText = currentMsPerDiv < 1.0
-                                    ? juce::String (currentMsPerDiv * 1000.0, 0) + " us/Div"
-                                    : juce::String (currentMsPerDiv, 2) + " ms/Div";
+        const juce::String timeText = currentMsPerDiv < 1.0
+                                          ? juce::String (currentMsPerDiv * 1000.0, 0) + " us/div"
+                                          : juce::String (currentMsPerDiv, 2) + " ms/div";
 
         g.drawText (timeText + "   |   " + juce::String (currentSampleRate / 1000.0, 1) + " kHz",
                     juce::Rectangle<float> (plot.getX() + 60.0f, y, plot.getWidth() - 160.0f, 16.0f),
                     juce::Justification::centred);
 
-        // Pegelanzeige unter dem Raster
-        const auto fmt = [] (float db) { return db <= -119.0f ? juce::String ("-inf") : juce::String (db, 1); };
-        const float yb = plot.getBottom() + 4.0f;
+        // Level readout below the grid
+        const auto fmt  = [] (float db) { return db <= -119.0f ? juce::String ("-inf") : juce::String (db, 1); };
+        const float yb   = plot.getBottom() + 4.0f;
         const float half = plot.getWidth() * 0.5f;
 
         g.setColour (showL ? traceL : traceL.withAlpha (0.3f));
@@ -307,7 +308,7 @@ private:
                     juce::Rectangle<float> (plot.getX() + half, yb, half, 16.0f), juce::Justification::centredRight);
 
         g.setColour (triggered ? accent : text.withAlpha (0.4f));
-        g.drawText (triggered ? "TRIG" : "FREI",
+        g.drawText (triggered ? "TRIG" : "FREE",
                     juce::Rectangle<float> (plot.getRight() - 60.0f, y, 60.0f, 16.0f),
                     juce::Justification::centredRight);
     }

@@ -2,7 +2,80 @@
 
 #include "PluginProcessor.h"
 #include "ScopeComponent.h"
+#include "SpectrumComponent.h"
 #include "DevTestLookAndFeel.h"
+
+using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
+using ComboAttachment  = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
+using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
+
+//==============================================================================
+// Helper functions for consistent controls
+//==============================================================================
+namespace UiHelpers
+{
+    inline void setupLabel (juce::Component& parent, juce::Label& label, const juce::String& text)
+    {
+        label.setText (text, juce::dontSendNotification);
+        label.setFont (juce::Font (juce::FontOptions (14.0f)));
+        parent.addAndMakeVisible (label);
+    }
+
+    inline void setupSlider (juce::Component& parent, juce::Slider& slider)
+    {
+        parent.addAndMakeVisible (slider);
+        slider.setColour (juce::Slider::textBoxTextColourId,       DevTestColours::text);
+        slider.setColour (juce::Slider::textBoxBackgroundColourId, DevTestColours::background);
+        slider.setSliderStyle (juce::Slider::LinearHorizontal);
+        slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 96, 24);
+        slider.setTextBoxIsEditable (true); // values can be typed in directly, e.g. "440" or "1k"
+    }
+
+    inline void setupCombo (juce::Component& parent, juce::ComboBox& box,
+                            juce::AudioProcessorValueTreeState& apvts, const juce::String& paramID)
+    {
+        if (auto* choice = dynamic_cast<juce::AudioParameterChoice*> (apvts.getParameter (paramID)))
+            box.addItemList (choice->choices, 1);
+
+        parent.addAndMakeVisible (box);
+    }
+}
+
+//==============================================================================
+// "Scope" tab: oscilloscope + time/div + trigger
+//==============================================================================
+class ScopePage final : public juce::Component
+{
+public:
+    explicit ScopePage (AudioPluginAudioProcessor& p);
+    void resized() override;
+
+private:
+    ScopeComponent scope;
+    juce::Label  timeLabel;
+    juce::Slider timeSlider;
+    juce::ToggleButton triggerButton { "Trigger (rising edge)" };
+
+    std::unique_ptr<SliderAttachment> timeAttach;
+    std::unique_ptr<ButtonAttachment> triggerAttach;
+};
+
+//==============================================================================
+// "FFT" tab: spectrum + settings
+//==============================================================================
+class FftPage final : public juce::Component
+{
+public:
+    explicit FftPage (AudioPluginAudioProcessor& p);
+    void resized() override;
+
+private:
+    SpectrumComponent spectrum;
+    juce::Label    sizeLabel, windowLabel, avgLabel, rangeLabel;
+    juce::ComboBox sizeBox, windowBox, avgBox, rangeBox;
+
+    std::unique_ptr<ComboAttachment> sizeAttach, windowAttach, avgAttach, rangeAttach;
+};
 
 //==============================================================================
 class AudioPluginAudioProcessorEditor final : public juce::AudioProcessorEditor
@@ -15,40 +88,42 @@ public:
     void resized() override;
 
 private:
-    using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
-    using ComboAttachment  = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
-    using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
+    void showPage (int index);
+    void layoutTitle();
 
-    void setupLabel  (juce::Label&, const juce::String& text);
-    void setupSlider (juce::Slider&);
-    void setupCombo  (juce::ComboBox&, const juce::String& paramID);
+    static constexpr int   headerHeight = 56;
+    static constexpr float titleBorder  = 5.0f;   // frame thickness around the program name
 
     AudioPluginAudioProcessor& processorRef;
     DevTestLookAndFeel lookAndFeel;
 
-    ScopeComponent scope;
+    // Tabs
+    juce::TextButton scopeTab { "Scope" }, fftTab { "FFT" };
+    ScopePage scopePage;
+    FftPage   fftPage;
 
-    // Oszilloskop
-    juce::GroupComponent scopeGroup { {}, "OSZILLOSKOP" };
-    juce::Label    srcLLabel, srcRLabel, timeLabel;
+    // Channels (shared by Scope and FFT)
+    juce::GroupComponent channelGroup { {}, "CHANNELS" };
+    juce::Label    srcLLabel, srcRLabel;
     juce::ComboBox srcLBox, srcRBox;
-    juce::Slider   timeSlider;
-    juce::ToggleButton triggerButton     { "Trigger (steigende Flanke)" };
-    juce::ToggleButton passThroughButton { "Eingang zum Ausgang durchleiten" };
+    juce::ToggleButton passThroughButton { "Pass input through to output" };
 
-    // Generator
-    juce::GroupComponent genGroup { {}, "SINUSGENERATOR" };
-    juce::ToggleButton genOnButton { "Generator an" };
-    juce::Label    freqLabel, levelLabel, genOutLabel;
+    // Generator (shared by Scope and FFT)
+    juce::GroupComponent genGroup { {}, "SIGNAL GENERATOR" };
+    juce::ToggleButton genOnButton { "Generator on" };
+    juce::Label    waveLabel, freqLabel, levelLabel, genOutLabel;
+    juce::ComboBox waveBox, genOutBox;
     juce::Slider   freqSlider, levelSlider;
-    juce::ComboBox genOutBox;
 
-    // Hinweis fuer Ein-/Ausgangswahl im Standalone
     juce::Label ioHint;
 
-    std::unique_ptr<ComboAttachment>  srcLAttach, srcRAttach, genOutAttach;
-    std::unique_ptr<SliderAttachment> timeAttach, freqAttach, levelAttach;
-    std::unique_ptr<ButtonAttachment> triggerAttach, passAttach, genOnAttach;
+    // Program name in a framed box (text is drawn as a path so it can be centred exactly)
+    juce::Path titlePath;
+    juce::Rectangle<float> titleBox;
+
+    std::unique_ptr<ComboAttachment>  srcLAttach, srcRAttach, genOutAttach, waveAttach;
+    std::unique_ptr<SliderAttachment> freqAttach, levelAttach;
+    std::unique_ptr<ButtonAttachment> passAttach, genOnAttach;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioPluginAudioProcessorEditor)
 };
