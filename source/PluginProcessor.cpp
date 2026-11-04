@@ -3,185 +3,224 @@
 
 //==============================================================================
 AudioPluginAudioProcessor::AudioPluginAudioProcessor()
-     : AudioProcessor (BusesProperties()
-                     #if ! JucePlugin_IsMidiEffect
-                      #if ! JucePlugin_IsSynth
-                       .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
-                      #endif
-                       .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
-                     #endif
-                       )
+    : AudioProcessor (BusesProperties()
+                          .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
+                          .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+      apvts (*this, nullptr, "PARAMETERS", createParameterLayout())
 {
-}
-
-AudioPluginAudioProcessor::~AudioPluginAudioProcessor()
-{
-}
-
-//==============================================================================
-const juce::String AudioPluginAudioProcessor::getName() const
-{
-    return JucePlugin_Name;
-}
-
-bool AudioPluginAudioProcessor::acceptsMidi() const
-{
-   #if JucePlugin_WantsMidiInput
-    return true;
-   #else
-    return false;
-   #endif
-}
-
-bool AudioPluginAudioProcessor::producesMidi() const
-{
-   #if JucePlugin_ProducesMidiOutput
-    return true;
-   #else
-    return false;
-   #endif
-}
-
-bool AudioPluginAudioProcessor::isMidiEffect() const
-{
-   #if JucePlugin_IsMidiEffect
-    return true;
-   #else
-    return false;
-   #endif
-}
-
-double AudioPluginAudioProcessor::getTailLengthSeconds() const
-{
-    return 0.0;
-}
-
-int AudioPluginAudioProcessor::getNumPrograms()
-{
-    return 1;   // NB: some hosts don't cope very well if you tell them there are 0 programs,
-                // so this should be at least 1, even if you're not really implementing programs.
-}
-
-int AudioPluginAudioProcessor::getCurrentProgram()
-{
-    return 0;
-}
-
-void AudioPluginAudioProcessor::setCurrentProgram (int index)
-{
-    juce::ignoreUnused (index);
-}
-
-const juce::String AudioPluginAudioProcessor::getProgramName (int index)
-{
-    juce::ignoreUnused (index);
-    return {};
-}
-
-void AudioPluginAudioProcessor::changeProgramName (int index, const juce::String& newName)
-{
-    juce::ignoreUnused (index, newName);
+    scopeSrcLParam   = apvts.getRawParameterValue (ParamIDs::scopeSourceL);
+    scopeSrcRParam   = apvts.getRawParameterValue (ParamIDs::scopeSourceR);
+    passThroughParam = apvts.getRawParameterValue (ParamIDs::passThrough);
+    genOnParam       = apvts.getRawParameterValue (ParamIDs::genOn);
+    genFreqParam     = apvts.getRawParameterValue (ParamIDs::genFreq);
+    genLevelParam    = apvts.getRawParameterValue (ParamIDs::genLevel);
+    genOutputParam   = apvts.getRawParameterValue (ParamIDs::genOutput);
 }
 
 //==============================================================================
-void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+juce::AudioProcessorValueTreeState::ParameterLayout AudioPluginAudioProcessor::createParameterLayout()
 {
-    // Use this method as the place to do any pre-playback
-    // initialisation that you need..
-    juce::ignoreUnused (sampleRate, samplesPerBlock);
+    using namespace juce;
+    AudioProcessorValueTreeState::ParameterLayout layout;
+
+    const StringArray sources { "Aus", "Eingang L", "Eingang R", "Generator" };
+
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::scopeSourceL, 1 },
+                                                        "Oszi L Quelle", sources, 1));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::scopeSourceR, 1 },
+                                                        "Oszi R Quelle", sources, 2));
+
+    // Zeit pro Division in Millisekunden (logarithmisch verteilt)
+    {
+        NormalisableRange<float> range (0.02f, 100.0f);
+        range.setSkewForCentre (2.0f);
+
+        auto attributes = AudioParameterFloatAttributes()
+            .withStringFromValueFunction ([] (float ms, int)
+            {
+                if (ms < 1.0f)   return String (ms * 1000.0f, 0) + " us/Div";
+                if (ms < 10.0f)  return String (ms, 2) + " ms/Div";
+                return String (ms, 1) + " ms/Div";
+            })
+            .withValueFromStringFunction ([] (const String& text)
+            {
+                const auto value = text.retainCharacters ("0123456789.,").replaceCharacter (',', '.').getFloatValue();
+                return text.containsIgnoreCase ("us") ? value / 1000.0f : value;
+            });
+
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::timePerDiv, 1 },
+                                                           "Zeit/Div", range, 2.0f, attributes));
+    }
+
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::trigger, 1 },
+                                                      "Trigger", true));
+
+    // Standardmaessig AUS, damit im Standalone keine Rueckkopplung entsteht
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::passThrough, 1 },
+                                                      "Eingang durchleiten", false));
+
+    // ---------------- Generator ----------------
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::genOn, 1 },
+                                                      "Generator an", false));
+    {
+        NormalisableRange<float> range (20.0f, 20000.0f);
+        range.setSkewForCentre (1000.0f);
+
+        auto attributes = AudioParameterFloatAttributes()
+            .withLabel ("Hz")
+            .withStringFromValueFunction ([] (float hz, int)
+            {
+                if (hz < 1000.0f) return String (hz, 1) + " Hz";
+                return String (hz / 1000.0f, 3) + " kHz";
+            })
+            .withValueFromStringFunction ([] (const String& text)
+            {
+                auto value = text.retainCharacters ("0123456789.,").replaceCharacter (',', '.').getFloatValue();
+                if (text.containsIgnoreCase ("k"))
+                    value *= 1000.0f;
+                return value;
+            });
+
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::genFreq, 1 },
+                                                           "Frequenz", range, 1000.0f, attributes));
+    }
+    {
+        auto attributes = AudioParameterFloatAttributes()
+            .withLabel ("dB")
+            .withStringFromValueFunction ([] (float db, int) { return String (db, 1) + " dBFS"; })
+            .withValueFromStringFunction ([] (const String& text)
+            {
+                return text.retainCharacters ("-0123456789.,").replaceCharacter (',', '.').getFloatValue();
+            });
+
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::genLevel, 1 },
+                                                           "Amplitude",
+                                                           NormalisableRange<float> (-60.0f, 0.0f, 0.1f),
+                                                           -12.0f, attributes));
+    }
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::genOutput, 1 },
+                                                        "Generator Ausgang",
+                                                        StringArray { "Aus", "L", "R", "L + R" }, 3));
+    return layout;
 }
 
-void AudioPluginAudioProcessor::releaseResources()
+//==============================================================================
+void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int)
 {
-    // When playback stops, you can use this as an opportunity to free up any
-    // spare memory, etc.
+    currentSampleRate = sampleRate;
+
+    smoothedFreq.reset (sampleRate, 0.05);
+    smoothedFreq.setCurrentAndTargetValue (genFreqParam->load());
+
+    smoothedGain.reset (sampleRate, 0.02);
+    smoothedGain.setCurrentAndTargetValue (0.0f);
+
+    phase = 0.0;
 }
 
 bool AudioPluginAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-  #if JucePlugin_IsMidiEffect
-    juce::ignoreUnused (layouts);
-    return true;
-  #else
-    // This is the place where you check if the layout is supported.
-    // In this template code we only support mono or stereo.
-    // Some plugin hosts, such as certain GarageBand versions, will only
-    // load plugins that support stereo bus layouts.
-    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::mono()
-     && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
-        return false;
+    const auto in  = layouts.getMainInputChannelSet();
+    const auto out = layouts.getMainOutputChannelSet();
 
-    // This checks if the input layout matches the output layout
-   #if ! JucePlugin_IsSynth
-    if (layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
-        return false;
-   #endif
-
-    return true;
-  #endif
-}
-
-void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
-                                              juce::MidiBuffer& midiMessages)
-{
-    juce::ignoreUnused (midiMessages);
-
-    juce::ScopedNoDenormals noDenormals;
-    auto totalNumInputChannels  = getTotalNumInputChannels();
-    auto totalNumOutputChannels = getTotalNumOutputChannels();
-
-    // In case we have more outputs than inputs, this code clears any output
-    // channels that didn't contain input data, (because these aren't
-    // guaranteed to be empty - they may contain garbage).
-    // This is here to avoid people getting screaming feedback
-    // when they first compile a plugin, but obviously you don't need to keep
-    // this code if your algorithm always overwrites all the output channels.
-    for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
-        buffer.clear (i, 0, buffer.getNumSamples());
-
-    // This is the place where you'd normally do the guts of your plugin's
-    // audio processing...
-    // Make sure to reset the state if your inner loop is processing
-    // the samples and the outer loop is handling the channels.
-    // Alternatively, you can process the samples with the channels
-    // interleaved by keeping the same state.
-    for (int channel = 0; channel < totalNumInputChannels; ++channel)
+    const auto ok = [] (const juce::AudioChannelSet& set)
     {
-        auto* channelData = buffer.getWritePointer (channel);
-        juce::ignoreUnused (channelData);
-        // ..do something to the data...
-    }
+        return set == juce::AudioChannelSet::mono() || set == juce::AudioChannelSet::stereo();
+    };
+
+    return ok (in) && ok (out);
 }
 
 //==============================================================================
-bool AudioPluginAudioProcessor::hasEditor() const
+void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
-    return true; // (change this to false if you choose to not supply an editor)
+    juce::ScopedNoDenormals noDenormals;
+
+    const int numIn      = getTotalNumInputChannels();
+    const int numOut     = getTotalNumOutputChannels();
+    const int numSamples = buffer.getNumSamples();
+    const double sr      = currentSampleRate.load();
+
+    // Parameter einmal pro Block lesen
+    const auto srcL       = (ScopeSource) juce::roundToInt (scopeSrcLParam->load());
+    const auto srcR       = (ScopeSource) juce::roundToInt (scopeSrcRParam->load());
+    const bool passThru   = passThroughParam->load() > 0.5f;
+    const bool genOn      = genOnParam->load() > 0.5f;
+    const auto genOut     = (GenOutput) juce::roundToInt (genOutputParam->load());
+
+    smoothedFreq.setTargetValue (genFreqParam->load());
+    smoothedGain.setTargetValue (genOn ? juce::Decibels::decibelsToGain (genLevelParam->load()) : 0.0f);
+
+    bool genToL = genOut == GenOutput::left  || genOut == GenOutput::both;
+    const bool genToR = genOut == GenOutput::right || genOut == GenOutput::both;
+
+    // Mono-Ausgang: Generator landet auf dem einzigen Kanal, egal ob L oder R gewaehlt
+    if (numOut == 1)
+        genToL = genToL || genToR;
+
+    // Eingaenge (bei Mono-Eingang wird R = L)
+    const float* inL = numIn > 0 ? buffer.getReadPointer (0) : nullptr;
+    const float* inR = numIn > 1 ? buffer.getReadPointer (1) : inL;
+
+    float* outL = numOut > 0 ? buffer.getWritePointer (0) : nullptr;
+    float* outR = numOut > 1 ? buffer.getWritePointer (1) : nullptr;
+
+    const auto pick = [] (ScopeSource s, float l, float r, float g)
+    {
+        switch (s)
+        {
+            case ScopeSource::inputL:    return l;
+            case ScopeSource::inputR:    return r;
+            case ScopeSource::generator: return g;
+            case ScopeSource::off:       break;
+        }
+        return 0.0f;
+    };
+
+    constexpr double twoPi = juce::MathConstants<double>::twoPi;
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        // Eingang zuerst lesen, da Ein- und Ausgang denselben Puffer teilen
+        const float l = inL != nullptr ? inL[i] : 0.0f;
+        const float r = inR != nullptr ? inR[i] : 0.0f;
+
+        // Sinus erzeugen
+        const float gen = smoothedGain.getNextValue() * (float) std::sin (phase);
+        phase += twoPi * (double) smoothedFreq.getNextValue() / sr;
+        if (phase >= twoPi)
+            phase -= twoPi;
+
+        scopeBuffer.push (pick (srcL, l, r, gen), pick (srcR, l, r, gen));
+
+        if (outL != nullptr) outL[i] = (passThru ? l : 0.0f) + (genToL ? gen : 0.0f);
+        if (outR != nullptr) outR[i] = (passThru ? r : 0.0f) + (genToR ? gen : 0.0f);
+    }
+
+    for (int ch = 2; ch < numOut; ++ch)
+        buffer.clear (ch, 0, numSamples);
 }
 
+//==============================================================================
 juce::AudioProcessorEditor* AudioPluginAudioProcessor::createEditor()
 {
     return new AudioPluginAudioProcessorEditor (*this);
 }
 
-//==============================================================================
 void AudioPluginAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    // You should use this method to store your parameters in the memory block.
-    // You could do that either as raw data, or use the XML or ValueTree classes
-    // as intermediaries to make it easy to save and load complex data.
-    juce::ignoreUnused (destData);
+    if (auto xml = apvts.copyState().createXml())
+        copyXmlToBinary (*xml, destData);
 }
 
 void AudioPluginAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    // You should use this method to restore your parameters from this memory block,
-    // whose contents will have been created by the getStateInformation() call.
-    juce::ignoreUnused (data, sizeInBytes);
+    if (auto xml = getXmlFromBinary (data, sizeInBytes))
+        if (xml->hasTagName (apvts.state.getType()))
+            apvts.replaceState (juce::ValueTree::fromXml (*xml));
 }
 
 //==============================================================================
-// This creates new instances of the plugin..
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new AudioPluginAudioProcessor();
