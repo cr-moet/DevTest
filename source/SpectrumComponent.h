@@ -22,6 +22,7 @@ public:
         windowParam = processor.apvts.getRawParameterValue (ParamIDs::fftWindow);
         avgParam    = processor.apvts.getRawParameterValue (ParamIDs::fftAverage);
         rangeParam  = processor.apvts.getRawParameterValue (ParamIDs::fftRange);
+        maxFreqParam = processor.apvts.getRawParameterValue (ParamIDs::fftMaxFreq);
         srcLParam   = processor.apvts.getRawParameterValue (ParamIDs::scopeSourceL);
         srcRParam   = processor.apvts.getRawParameterValue (ParamIDs::scopeSourceR);
 
@@ -59,7 +60,14 @@ private:
                                          .withTrimmedTop (24.0f).withTrimmedBottom (40.0f);
     }
 
-    float getMaxFreq() const    { return (float) juce::jmin (20000.0, sampleRate * 0.5); }
+    // Upper end of the frequency axis: selected range, limited by the Nyquist frequency
+    float getSelectedMaxFreq() const
+    {
+        static constexpr float choices[] = { 20000.0f, 50000.0f, 100000.0f };
+        return choices[juce::jlimit (0, 2, juce::roundToInt (maxFreqParam->load()))];
+    }
+
+    float getMaxFreq() const    { return juce::jmin (getSelectedMaxFreq(), (float) (sampleRate * 0.5)); }
     float getRangeDb() const    { return 60.0f + 30.0f * (float) juce::roundToInt (rangeParam->load()); }
 
     float freqToX (float f, juce::Rectangle<float> plot) const
@@ -193,7 +201,8 @@ private:
 
         // Frequency lines
         static constexpr int freqs[] = { 20, 30, 40, 50, 60, 70, 80, 90, 100, 200, 300, 400, 500, 600, 700, 800, 900,
-                                           1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 20000 };
+                                           1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 20000,
+                                           30000, 40000, 50000, 60000, 70000, 80000, 90000, 100000 };
         for (auto f : freqs)
         {
             if ((float) f > getMaxFreq())
@@ -201,7 +210,7 @@ private:
 
             const float x = freqToX ((float) f, plot);
             const bool  major = (f == 20 || f == 50 || f == 100 || f == 200 || f == 500 || f == 1000
-                                 || f == 2000 || f == 5000 || f == 10000 || f == 20000);
+                                 || f == 2000 || f == 5000 || f == 10000 || f == 20000 || f == 50000 || f == 100000);
             g.setColour (major ? gridStrong.withAlpha (0.25f) : grid.withAlpha (0.08f));
             g.drawLine (x, plot.getY(), x, plot.getBottom(), 1.0f);
 
@@ -310,9 +319,14 @@ private:
                     juce::Rectangle<float> (plot.getCentreX(), y, plot.getWidth() * 0.5f, 16.0f),
                     juce::Justification::centredRight);
 
+        // Note when the sample rate does not allow the selected range
+        const juce::String limitNote = getMaxFreq() < getSelectedMaxFreq() - 1.0f
+                                           ? "   |   range limited to " + juce::String (getMaxFreq() / 1000.0f, 1) + " kHz by sample rate"
+                                           : juce::String();
+
         g.setColour (text.withAlpha (0.7f));
         g.drawText ("Resolution " + juce::String (sampleRate / fftSize, 2) + " Hz/bin   |   "
-                        + juce::String (sampleRate / 1000.0, 1) + " kHz",
+                        + juce::String (sampleRate / 1000.0, 1) + " kHz" + limitNote,
                     juce::Rectangle<float> (plot.getX(), plot.getBottom() + 20.0f, plot.getWidth(), 16.0f),
                     juce::Justification::centredRight);
     }
@@ -324,6 +338,7 @@ private:
     std::atomic<float>* windowParam = nullptr;
     std::atomic<float>* avgParam    = nullptr;
     std::atomic<float>* rangeParam  = nullptr;
+    std::atomic<float>* maxFreqParam = nullptr;
     std::atomic<float>* srcLParam   = nullptr;
     std::atomic<float>* srcRParam   = nullptr;
 

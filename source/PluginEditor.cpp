@@ -43,48 +43,142 @@ FftPage::FftPage (AudioPluginAudioProcessor& p)
     setupLabel (*this, windowLabel, "Window");
     setupLabel (*this, avgLabel,    "Averaging");
     setupLabel (*this, rangeLabel,  "Range");
+    setupLabel (*this, maxFreqLabel, "Max freq");
 
     setupCombo (*this, sizeBox,   p.apvts, ParamIDs::fftSize);
     setupCombo (*this, windowBox, p.apvts, ParamIDs::fftWindow);
     setupCombo (*this, avgBox,    p.apvts, ParamIDs::fftAverage);
     setupCombo (*this, rangeBox,  p.apvts, ParamIDs::fftRange);
+    setupCombo (*this, maxFreqBox, p.apvts, ParamIDs::fftMaxFreq);
 
     sizeAttach   = std::make_unique<ComboAttachment> (p.apvts, ParamIDs::fftSize,    sizeBox);
     windowAttach = std::make_unique<ComboAttachment> (p.apvts, ParamIDs::fftWindow,  windowBox);
     avgAttach    = std::make_unique<ComboAttachment> (p.apvts, ParamIDs::fftAverage, avgBox);
     rangeAttach  = std::make_unique<ComboAttachment> (p.apvts, ParamIDs::fftRange,   rangeBox);
+    maxFreqAttach = std::make_unique<ComboAttachment> (p.apvts, ParamIDs::fftMaxFreq, maxFreqBox);
 }
 
 void FftPage::resized()
 {
     auto area = getLocalBounds();
-    auto row  = area.removeFromBottom (32);
+    auto row2 = area.removeFromBottom (32);
+    area.removeFromBottom (6);
+    auto row1 = area.removeFromBottom (32);
     area.removeFromBottom (8);
     spectrum.setBounds (area);
 
-    // Four settings side by side, equal width
-    const int cell = row.getWidth() / 4;
-    const std::pair<juce::Label*, juce::ComboBox*> items[] = {
-        { &sizeLabel, &sizeBox }, { &windowLabel, &windowBox }, { &avgLabel, &avgBox }, { &rangeLabel, &rangeBox } };
+    // Settings in two rows: three cells on top, two below (aligned with the top cells)
+    const int cell = row1.getWidth() / 3;
 
-    for (auto [label, box] : items)
+    const auto place = [cell] (juce::Rectangle<int>& row, juce::Label& label, juce::ComboBox& box)
     {
-        auto c = row.removeFromLeft (cell).withTrimmedRight (10);
-        label->setBounds (c.removeFromLeft (juce::jmin (78, c.getWidth() / 2)));
-        box->setBounds (c);
-    }
+        auto c = row.removeFromLeft (cell).withTrimmedRight (12);
+        label.setBounds (c.removeFromLeft (80));
+        box.setBounds (c);
+    };
+
+    place (row1, sizeLabel,    sizeBox);
+    place (row1, windowLabel,  windowBox);
+    place (row1, avgLabel,     avgBox);
+    place (row2, rangeLabel,   rangeBox);
+    place (row2, maxFreqLabel, maxFreqBox);
+}
+
+//==============================================================================
+// KneePage
+//==============================================================================
+KneePage::KneePage (AudioPluginAudioProcessor& p)
+    : processor (p), knee (p)
+{
+    addAndMakeVisible (knee);
+
+    startButton.setColour (juce::TextButton::buttonColourId,  DevTestColours::accent);
+    startButton.setColour (juce::TextButton::textColourOffId, DevTestColours::background);
+    startButton.onClick = [this]
+    {
+        if (processor.isKneeTestRunning())
+        {
+            processor.stopKneeTest();
+        }
+        else
+        {
+            // Switch the normal generator off, so it does not come back after the test
+            if (auto* genOn = processor.apvts.getParameter (ParamIDs::genOn))
+                genOn->setValueNotifyingHost (0.0f);
+
+            knee.clear();
+            processor.startKneeTest();
+        }
+        timerCallback();
+    };
+    addAndMakeVisible (startButton);
+
+    setupLabel (*this, waveLabel,     "Waveform");
+    setupLabel (*this, freqLabel,     "Frequency");
+    setupLabel (*this, durationLabel, "Sweep time");
+    setupLabel (*this, outputLabel,   "Output");
+
+    setupCombo (*this, waveBox,   p.apvts, ParamIDs::kneeWave);
+    setupCombo (*this, outputBox, p.apvts, ParamIDs::kneeOutput);
+    setupSlider (*this, freqSlider);
+    setupSlider (*this, durationSlider);
+
+    waveAttach     = std::make_unique<ComboAttachment>  (p.apvts, ParamIDs::kneeWave,     waveBox);
+    outputAttach   = std::make_unique<ComboAttachment>  (p.apvts, ParamIDs::kneeOutput,   outputBox);
+    freqAttach     = std::make_unique<SliderAttachment> (p.apvts, ParamIDs::kneeFreq,     freqSlider);
+    durationAttach = std::make_unique<SliderAttachment> (p.apvts, ParamIDs::kneeDuration, durationSlider);
+
+    startTimerHz (10);
+}
+
+void KneePage::timerCallback()
+{
+    // Button shows the action it will perform
+    const bool running = processor.isKneeTestRunning();
+    startButton.setButtonText (running ? "Stop" : "Start test");
+
+    // Settings cannot be changed during a sweep
+    for (juce::Component* c : { (juce::Component*) &waveBox, (juce::Component*) &freqSlider,
+                                (juce::Component*) &durationSlider, (juce::Component*) &outputBox })
+        c->setEnabled (! running);
+}
+
+void KneePage::resized()
+{
+    auto area = getLocalBounds();
+    auto row2 = area.removeFromBottom (32);
+    area.removeFromBottom (6);
+    auto row1 = area.removeFromBottom (32);
+    area.removeFromBottom (8);
+    knee.setBounds (area);
+
+    // Row 1: start button, waveform, frequency
+    startButton.setBounds (row1.removeFromLeft (110));
+    row1.removeFromLeft (16);
+    waveLabel.setBounds (row1.removeFromLeft (76));
+    waveBox.setBounds (row1.removeFromLeft (130));
+    row1.removeFromLeft (16);
+    freqLabel.setBounds (row1.removeFromLeft (80));
+    freqSlider.setBounds (row1);
+
+    // Row 2: sweep time, output of the test tone (inputs L and R are always measured)
+    durationLabel.setBounds (row2.removeFromLeft (90));
+    durationSlider.setBounds (row2.removeFromLeft (juce::jmax (200, row2.getWidth() - 200)));
+    row2.removeFromLeft (16);
+    outputLabel.setBounds (row2.removeFromLeft (56));
+    outputBox.setBounds (row2.removeFromLeft (juce::jmin (100, row2.getWidth())));
 }
 
 //==============================================================================
 // Editor
 //==============================================================================
 AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAudioProcessor& p)
-    : AudioProcessorEditor (&p), processorRef (p), scopePage (p), fftPage (p)
+    : AudioProcessorEditor (&p), processorRef (p), scopePage (p), fftPage (p), kneePage (p)
 {
     setLookAndFeel (&lookAndFeel);
 
     // ---------------- Tabs ----------------
-    for (auto* tab : { &scopeTab, &fftTab })
+    for (auto* tab : { &scopeTab, &fftTab, &kneeTab })
     {
         tab->setClickingTogglesState (true);
         tab->setRadioGroupId (1001);
@@ -97,9 +191,11 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
     }
     scopeTab.onClick = [this] { if (scopeTab.getToggleState()) showPage (0); };
     fftTab.onClick   = [this] { if (fftTab.getToggleState())   showPage (1); };
+    kneeTab.onClick  = [this] { if (kneeTab.getToggleState())  showPage (2); };
 
     addChildComponent (scopePage);
     addChildComponent (fftPage);
+    addChildComponent (kneePage);
 
     // ---------------- Channels ----------------
     auto& s = processorRef.apvts;
@@ -145,9 +241,10 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
     genOnAttach  = std::make_unique<ButtonAttachment> (s, ParamIDs::genOn,        genOnButton);
 
     // Restore the last selected tab (saved with the project)
-    const int lastPage = (int) processorRef.apvts.state.getProperty ("page", 0);
-    (lastPage == 1 ? fftTab : scopeTab).setToggleState (true, juce::dontSendNotification);
-    showPage (lastPage == 1 ? 1 : 0);
+    const int lastPage = juce::jlimit (0, 2, (int) processorRef.apvts.state.getProperty ("page", 0));
+    juce::TextButton* tabs[] = { &scopeTab, &fftTab, &kneeTab };
+    tabs[lastPage]->setToggleState (true, juce::dontSendNotification);
+    showPage (lastPage);
 
     setResizable (true, true);
     setResizeLimits (860, 560, 2400, 1600);
@@ -163,6 +260,7 @@ void AudioPluginAudioProcessorEditor::showPage (int index)
 {
     scopePage.setVisible (index == 0);
     fftPage.setVisible   (index == 1);
+    kneePage.setVisible  (index == 2);
     processorRef.apvts.state.setProperty ("page", index, nullptr);
 }
 
@@ -215,7 +313,7 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
 
     // Line below the tabs
     g.setColour (accent);
-    g.fillRect (scopeTab.getX(), scopeTab.getBottom(), fftTab.getRight() - scopeTab.getX(), 2);
+    g.fillRect (scopeTab.getX(), scopeTab.getBottom(), kneeTab.getRight() - scopeTab.getX(), 2);
 }
 
 void AudioPluginAudioProcessorEditor::resized()
@@ -234,10 +332,12 @@ void AudioPluginAudioProcessorEditor::resized()
     auto tabRow = area.removeFromTop (30);
     scopeTab.setBounds (tabRow.removeFromLeft (90));
     fftTab.setBounds   (tabRow.removeFromLeft (90));
+    kneeTab.setBounds  (tabRow.removeFromLeft (90));
     area.removeFromTop (8);
 
     scopePage.setBounds (area);
     fftPage.setBounds   (area);
+    kneePage.setBounds  (area);
 
     constexpr int rowH = 30, gap = 6, labelW = 92;
 

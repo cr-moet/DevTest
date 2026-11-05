@@ -3,6 +3,7 @@
 #include "PluginProcessor.h"
 #include "ScopeComponent.h"
 #include "SpectrumComponent.h"
+#include "KneeComponent.h"
 #include "DevTestLookAndFeel.h"
 
 using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
@@ -71,10 +72,37 @@ public:
 
 private:
     SpectrumComponent spectrum;
-    juce::Label    sizeLabel, windowLabel, avgLabel, rangeLabel;
-    juce::ComboBox sizeBox, windowBox, avgBox, rangeBox;
+    juce::Label    sizeLabel, windowLabel, avgLabel, rangeLabel, maxFreqLabel;
+    juce::ComboBox sizeBox, windowBox, avgBox, rangeBox, maxFreqBox;
 
-    std::unique_ptr<ComboAttachment> sizeAttach, windowAttach, avgAttach, rangeAttach;
+    std::unique_ptr<ComboAttachment> sizeAttach, windowAttach, avgAttach, rangeAttach, maxFreqAttach;
+};
+
+//==============================================================================
+// "Knee" tab: compressor transfer curve. A test tone rises slowly from
+// -60 dBFS to 0 dBFS; the levels returned on inputs L and R are plotted
+// against the sent level.
+//==============================================================================
+class KneePage final : public juce::Component,
+                       private juce::Timer
+{
+public:
+    explicit KneePage (AudioPluginAudioProcessor& p);
+    void resized() override;
+
+private:
+    void timerCallback() override;
+
+    AudioPluginAudioProcessor& processor;
+    KneeComponent knee;
+
+    juce::TextButton startButton { "Start test" };
+    juce::Label    waveLabel, freqLabel, durationLabel, outputLabel;
+    juce::ComboBox waveBox, outputBox;
+    juce::Slider   freqSlider, durationSlider;
+
+    std::unique_ptr<ComboAttachment>  waveAttach, outputAttach;
+    std::unique_ptr<SliderAttachment> freqAttach, durationAttach;
 };
 
 //==============================================================================
@@ -98,9 +126,10 @@ private:
     DevTestLookAndFeel lookAndFeel;
 
     // Tabs
-    juce::TextButton scopeTab { "Scope" }, fftTab { "FFT" };
+    juce::TextButton scopeTab { "Scope" }, fftTab { "FFT" }, kneeTab { "Knee" };
     ScopePage scopePage;
     FftPage   fftPage;
+    KneePage  kneePage;
 
     // Channels (shared by Scope and FFT)
     juce::GroupComponent channelGroup { {}, "CHANNELS" };
