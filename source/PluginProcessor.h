@@ -27,6 +27,19 @@ namespace ParamIDs
     inline constexpr const char* kneeFreq     = "kneeFreq";
     inline constexpr const char* kneeDuration = "kneeDuration";
     inline constexpr const char* kneeOutput   = "kneeOutput";
+    inline constexpr const char* swMode       = "swMode";
+    inline constexpr const char* swLaw        = "swLaw";
+    inline constexpr const char* swEnd        = "swEnd";
+    inline constexpr const char* swDuration   = "swDuration";
+    inline constexpr const char* swLevel      = "swLevel";
+    inline constexpr const char* swOutput     = "swOutput";
+    inline constexpr const char* swGate       = "swGate";
+    inline constexpr const char* swSmooth     = "swSmooth";
+    inline constexpr const char* swRange      = "swRange";
+    inline constexpr const char* swNormalize  = "swNormalize";
+    inline constexpr const char* swInterval   = "swInterval";
+    inline constexpr const char* swAverages   = "swAverages";
+    inline constexpr const char* swContinuous = "swContinuous";
 }
 
 // Order must match the choice parameters
@@ -42,6 +55,24 @@ struct KneePoint
     float outputDbL = 0.0f;   // level coming back on input L
     float outputDbR = 0.0f;   // level coming back on input R
     uint32_t runId = 0;      // which test run this point belongs to
+};
+
+// Frequency response test
+enum class SweepMode { level = 0, impulse };      // sine sweep (level tracking) / Dirac impulses
+// linear:      constant Hz per second
+// logarithmic: constant time per octave
+// inverse:     "LF-weighted (1/f)": constant number of cycles per octave below
+//              1 kHz (enough time at low frequencies even for short sweeps),
+//              logarithmic above it
+enum class SweepLaw  { linear = 0, logarithmic, inverse };
+
+// One measured point of the level-tracking sweep (gain relative to the sent level)
+struct SweepPoint
+{
+    float freq  = 0.0f;
+    float gainL = 0.0f;   // dB
+    float gainR = 0.0f;   // dB
+    uint32_t runId = 0;
 };
 
 // Fixed sweep range of the knee test
@@ -98,6 +129,31 @@ public:
     // Reads new measurement points (GUI thread). Returns the number of points read.
     int readKneePoints (KneePoint* dest, int maxPoints) noexcept;
 
+    //==========================================================================
+    // Frequency response test. Called from the GUI thread.
+    // In impulse mode, startSweepTest() allocates the buffers for the returned
+    // impulse responses. Returns false if a previous run is still finishing.
+    bool startSweepTest();
+    void stopSweepTest() noexcept;
+    bool isSweepRunning() const noexcept     { return sweepRequested.load() || sweepBusy.load(); }
+    float getSweepProgress() const noexcept  { return sweepProgress.load(); }
+    uint32_t getSweepRunId() const noexcept  { return sweepRunIdShared.load(); }
+    int readSweepPoints (SweepPoint* dest, int maxPoints) noexcept;
+
+    // Impulse mode: one Dirac impulse per interval. The returned signal of each
+    // interval (= one impulse response) is handed to the GUI through 8 slots.
+    uint64_t getImpulsePeriodsDone() const noexcept    { return impPeriodsDone.load (std::memory_order_acquire); }
+    uint32_t getImpulseActiveRunId() const noexcept    { return impActiveRunId.load(); }
+    float    getImpulseAmplitude() const noexcept      { return impAmplitude.load(); }
+    double   getImpulseSampleRate() const noexcept     { return impSampleRate.load(); }
+
+    // Copies the impulse response of a finished interval (1-based index).
+    // Returns false if that slot has already been overwritten.
+    bool readImpulsePeriod (uint64_t index, std::vector<float>& left, std::vector<float>& right) const;
+
+    // End frequency of the sweep: selected value, limited to just below Nyquist
+    float getSweepEndFrequency() const noexcept;
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
@@ -141,6 +197,74 @@ private:
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> kneeFade { 0.0f };
     double   kneeSumGen = 0.0, kneeSumRetL = 0.0, kneeSumRetR = 0.0, kneeSumLevelDb = 0.0;
     int      kneeWinCount = 0, kneeWinLength = 960;
+
+    // ---------------- Frequency response test ----------------
+    std::atomic<float>* swModeParam     = nullptr;
+    std::atomic<float>* swLawParam      = nullptr;
+    std::atomic<float>* swEndParam      = nullptr;
+    std::atomic<float>* swDurationParam = nullptr;
+    std::atomic<float>* swLevelParam    = nullptr;
+    std::atomic<float>* swOutputParam   = nullptr;
+    std::atomic<float>* swIntervalParam = nullptr;
+    std::atomic<float>* swAveragesParam = nullptr;
+    std::atomic<float>* swContinuousParam = nullptr;
+
+    void pushSweepPoint (const SweepPoint& point) noexcept;
+
+    // GUI -> audio thread
+    std::atomic<bool>     sweepRequested { false }, sweepStopRequest { false };
+    std::atomic<bool>     sweepBusy { false };          // audio thread is generating / recording
+    std::atomic<float>    sweepProgress { 0.0f };
+    std::atomic<uint32_t> sweepRunIdShared { 0 };
+
+    // Settings prepared by the GUI for the next run (read by the audio thread at start)
+    struct SweepSetup
+    {
+        SweepMode mode = SweepMode::level;
+        SweepLaw  law  = SweepLaw::logarithmic;
+        double f0 = 10.0, f1 = 20000.0;
+        int64_t clickLength = 0, leadIn = 0, sweepLength = 1, tail = 0;
+        double crossover = 1000.0, cyclesPerOctave = 10.0;   // LF-weighted law
+        float gain = 0.25f;
+        int interval = 12000;    // impulse mode: samples per impulse
+        int averages = 4;        // impulse mode: number of impulses (single run)
+    } sweepSetup;
+
+    // Audio thread -> GUI: measured points
+    static constexpr int sweepFifoSize = 32768;
+    juce::AbstractFifo      sweepFifo { sweepFifoSize };
+    std::vector<SweepPoint> sweepFifoData = std::vector<SweepPoint> ((size_t) sweepFifoSize);
+
+    // Impulse mode: slots for the returned impulse responses
+    static constexpr int impulseSlots = 8;
+    std::vector<float> impSlotL[impulseSlots], impSlotR[impulseSlots];
+    std::atomic<uint64_t> impPeriodsDone { 0 };
+    std::atomic<uint32_t> impActiveRunId { 0 };
+    std::atomic<float>    impAmplitude { 1.0f };
+    std::atomic<double>   impSampleRate { 48000.0 };
+    int      impPos = 0;
+    uint64_t impPeriod = 0;
+
+    // Audio thread state
+    bool     swActive = false;
+    uint32_t swRunId = 0;
+    SweepSetup sw;
+    int64_t  swPos = 0;
+    double   swPhase = 0.0, swFreq = 10.0, swFreqStep = 0.0;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> swFade { 0.0f };
+    double   swSumGen = 0.0, swSumL = 0.0, swSumR = 0.0, swSumFreq = 0.0;
+    int      swWinCount = 0, swWinLength = 960;
+    double   swWeightSum = 0.0;
+    double   swHighFactor = 1.0;
+
+    // Latency compensation: sent tone and frequency of the last ~250 ms
+    std::vector<float> swSentRing, swFreqRing;
+    int64_t  swRingMask = 0, swRingPos = 0;
+    float    swClickPeak = 0.0f;
+    int64_t  swClickPeakPos = 0;
+    int      swLatency = 0;
+
+    double octavesPerSecond (double f, double sr) const noexcept;
 
     // Signal generator (phase 0..1)
     double phase = 0.0;

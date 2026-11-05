@@ -21,6 +21,16 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
     kneeFreqParam     = apvts.getRawParameterValue (ParamIDs::kneeFreq);
     kneeDurationParam = apvts.getRawParameterValue (ParamIDs::kneeDuration);
     kneeOutputParam   = apvts.getRawParameterValue (ParamIDs::kneeOutput);
+
+    swModeParam       = apvts.getRawParameterValue (ParamIDs::swMode);
+    swLawParam        = apvts.getRawParameterValue (ParamIDs::swLaw);
+    swEndParam        = apvts.getRawParameterValue (ParamIDs::swEnd);
+    swDurationParam   = apvts.getRawParameterValue (ParamIDs::swDuration);
+    swLevelParam      = apvts.getRawParameterValue (ParamIDs::swLevel);
+    swOutputParam     = apvts.getRawParameterValue (ParamIDs::swOutput);
+    swIntervalParam   = apvts.getRawParameterValue (ParamIDs::swInterval);
+    swAveragesParam   = apvts.getRawParameterValue (ParamIDs::swAverages);
+    swContinuousParam = apvts.getRawParameterValue (ParamIDs::swContinuous);
 }
 
 //==============================================================================
@@ -220,6 +230,58 @@ juce::AudioProcessorValueTreeState::ParameterLayout AudioPluginAudioProcessor::c
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::kneeOutput, 1 },
                                                         "Knee Output",
                                                         StringArray { "L", "R", "L + R" }, 2));
+
+    // ---------------- Frequency response test ----------------
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::swMode, 1 },
+                                                        "Sweep Mode", StringArray { "Sine sweep", "Impulse (Dirac)" }, 0));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::swInterval, 1 },
+                                                        "Impulse Interval", StringArray { "100 ms", "250 ms", "500 ms", "1 s" }, 1));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::swAverages, 1 },
+                                                        "Impulse Averages", StringArray { "1", "4", "16", "64" }, 1));
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::swContinuous, 1 },
+                                                      "Continuous", false));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::swLaw, 1 },
+                                                        "Sweep Law", StringArray { "Linear", "Logarithmic", "LF-weighted (1/f)" }, 2));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::swEnd, 1 },
+                                                        "Sweep End", StringArray { "22 kHz", "50 kHz", "100 kHz" }, 0));
+    {
+        NormalisableRange<float> range (1.0f, 60.0f, 1.0f);
+        range.setSkewForCentre (10.0f);
+
+        auto attributes = AudioParameterFloatAttributes()
+            .withLabel ("s")
+            .withStringFromValueFunction ([] (float sec, int) { return String ((int) sec) + " s"; })
+            .withValueFromStringFunction ([] (const String& text)
+            {
+                return text.retainCharacters ("0123456789.,").replaceCharacter (',', '.').getFloatValue();
+            });
+
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::swDuration, 1 },
+                                                           "Sweep Duration", range, 10.0f, attributes));
+    }
+    {
+        auto attributes = AudioParameterFloatAttributes()
+            .withLabel ("dB")
+            .withStringFromValueFunction ([] (float db, int) { return String (db, 1) + " dBFS"; })
+            .withValueFromStringFunction ([] (const String& text)
+            {
+                return text.retainCharacters ("-0123456789.,").replaceCharacter (',', '.').getFloatValue();
+            });
+
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::swLevel, 1 },
+                                                           "Sweep Level", NormalisableRange<float> (-60.0f, 0.0f, 0.1f),
+                                                           -12.0f, attributes));
+    }
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::swOutput, 1 },
+                                                        "Sweep Output", StringArray { "L", "R", "L + R" }, 2));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::swGate, 1 },
+                                                        "IR Window", StringArray { "5 ms", "20 ms", "100 ms", "500 ms", "Full" }, 2));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::swSmooth, 1 },
+                                                        "Smoothing", StringArray { "Off", "1/24 oct", "1/12 oct", "1/6 oct", "1/3 oct" }, 1));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::swRange, 1 },
+                                                        "Sweep Display Range", StringArray { "+/- 3 dB", "+/- 12 dB", "+/- 24 dB", "+/- 48 dB" }, 2));
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::swNormalize, 1 },
+                                                      "Normalize to 1 kHz", true));
     return layout;
 }
 
@@ -242,6 +304,21 @@ void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int)
     kneeActive = false;
     kneeRunning = false;
     kneeWinLength = juce::jmax (1, (int) (sampleRate * 0.02));   // 20 ms per measured point
+
+    // A running frequency response test is aborted as well
+    swFade.reset (sampleRate, 0.005);
+
+    // Ring buffers for the latency-compensated comparison (>= 250 ms, power of two)
+    {
+        size_t size = 1;
+        while ((double) size < sampleRate * 0.25) size <<= 1;
+        swSentRing.assign (size, 0.0f);
+        swFreqRing.assign (size, -1.0f);
+        swRingMask = (int64_t) size - 1;
+    }
+    swFade.setCurrentAndTargetValue (0.0f);
+    swActive = false;
+    sweepBusy = false;
 }
 
 //==============================================================================
@@ -249,6 +326,7 @@ void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int)
 //==============================================================================
 void AudioPluginAudioProcessor::startKneeTest() noexcept
 {
+    stopSweepTest();            // only one test tone at a time
     ++kneeRunIdShared;          // new run id -> the GUI ignores points from older runs
     kneeStopRequest  = false;
     kneeStartRequest = true;
@@ -306,6 +384,129 @@ void AudioPluginAudioProcessor::pushKneePoint (const KneePoint& point) noexcept
     else if (scope.blockSize2 > 0) kneeFifoData[(size_t) scope.startIndex2] = point;
 }
 
+//==============================================================================
+// Frequency response test: GUI side
+//==============================================================================
+float AudioPluginAudioProcessor::getSweepEndFrequency() const noexcept
+{
+    static constexpr float choices[] = { 22000.0f, 50000.0f, 100000.0f };
+    const float selected = choices[juce::jlimit (0, 2, juce::roundToInt (swEndParam->load()))];
+    return juce::jmin (selected, (float) (currentSampleRate.load() * 0.48));   // stay just below Nyquist
+}
+
+bool AudioPluginAudioProcessor::startSweepTest()
+{
+    if (sweepBusy.load())
+        return false;   // previous run still finishing on the audio thread
+
+    const double sr = currentSampleRate.load();
+
+    SweepSetup setup;
+    setup.mode = (SweepMode) juce::roundToInt (swModeParam->load());
+    setup.law  = (SweepLaw)  juce::roundToInt (swLawParam->load());
+    setup.f1   = getSweepEndFrequency();
+    setup.f0   = setup.law == SweepLaw::linear ? 0.0 : 10.0;   // log and 1/f sweeps cannot start at 0 Hz
+    setup.gain = juce::Decibels::decibelsToGain (swLevelParam->load());
+
+    setup.clickLength = (int64_t) (0.2 * sr);    // latency measurement (max. 200 ms loop latency)
+    setup.leadIn      = (int64_t) (0.3 * sr);    // settle at the start frequency
+    setup.tail        = (int64_t) (0.21 * sr);   // wait for the delayed return + fade-out
+    setup.sweepLength = juce::jmax ((int64_t) 1, (int64_t) (swDurationParam->load() * sr));
+
+    // LF-weighted law: below the crossover constant cycles per octave, above it constant
+    // time per octave (continuous at the crossover). The number of cycles per octave
+    // follows from the total duration:
+    //   T = C / ln2 * (1/f0 - 1/fc) + C / fc * log2 (f1 / fc)
+    setup.crossover = juce::jmin (1000.0, setup.f1 * 0.5);
+    {
+        const double duration = (double) setup.sweepLength / sr;
+        const double perCycle = (1.0 / 10.0 - 1.0 / setup.crossover) / std::log (2.0)
+                              + std::log2 (setup.f1 / setup.crossover) / setup.crossover;
+        setup.cyclesPerOctave = duration / perCycle;
+    }
+
+    static constexpr double intervals[] = { 0.1, 0.25, 0.5, 1.0 };
+    static constexpr int    averages[]  = { 1, 4, 16, 64 };
+    setup.interval = (int) (intervals[juce::jlimit (0, 3, juce::roundToInt (swIntervalParam->load()))] * sr);
+    setup.averages = averages[juce::jlimit (0, 3, juce::roundToInt (swAveragesParam->load()))];
+
+    // Allocate the impulse response slots here (GUI thread), never on the audio thread
+    if (setup.mode == SweepMode::impulse)
+    {
+        for (int i = 0; i < impulseSlots; ++i)
+        {
+            impSlotL[i].assign ((size_t) setup.interval, 0.0f);
+            impSlotR[i].assign ((size_t) setup.interval, 0.0f);
+        }
+    }
+
+    impAmplitude  = setup.gain;
+    impSampleRate = sr;
+    sweepSetup    = setup;
+
+    // Switch off a running knee test: only one test signal at a time
+    stopKneeTest();
+
+    ++sweepRunIdShared;
+    sweepProgress    = 0.0f;
+    sweepStopRequest = false;
+    sweepRequested   = true;
+    return true;
+}
+
+// Speed of the running sweep at frequency f (octaves per second)
+double AudioPluginAudioProcessor::octavesPerSecond (double f, double sr) const noexcept
+{
+    switch (sw.law)
+    {
+        case SweepLaw::linear:       return swFreqStep * sr / (f * std::log (2.0));
+        case SweepLaw::logarithmic:  return std::log2 (sw.f1 / sw.f0) * sr / (double) sw.sweepLength;
+        case SweepLaw::inverse:      break;
+    }
+    return juce::jmin (f, sw.crossover) / sw.cyclesPerOctave;
+}
+
+bool AudioPluginAudioProcessor::readImpulsePeriod (uint64_t index, std::vector<float>& left, std::vector<float>& right) const
+{
+    // The slot of interval k is overwritten again 8 intervals later
+    const auto isValid = [this, index] { return index >= 1 && getImpulsePeriodsDone() - index < impulseSlots - 1; };
+
+    if (! isValid())
+        return false;
+
+    const auto slot = (size_t) ((index - 1) % impulseSlots);
+    left  = impSlotL[slot];
+    right = impSlotR[slot];
+
+    return isValid();   // still valid after copying -> data is consistent
+}
+
+void AudioPluginAudioProcessor::stopSweepTest() noexcept
+{
+    if (sweepRequested.exchange (false))
+        return;   // not started yet
+
+    sweepStopRequest = true;
+}
+
+int AudioPluginAudioProcessor::readSweepPoints (SweepPoint* dest, int maxPoints) noexcept
+{
+    const auto scope = sweepFifo.read (juce::jmin (maxPoints, sweepFifo.getNumReady()));
+
+    for (int i = 0; i < scope.blockSize1; ++i) dest[i]                   = sweepFifoData[(size_t) (scope.startIndex1 + i)];
+    for (int i = 0; i < scope.blockSize2; ++i) dest[scope.blockSize1 + i] = sweepFifoData[(size_t) (scope.startIndex2 + i)];
+
+    return scope.blockSize1 + scope.blockSize2;
+}
+
+void AudioPluginAudioProcessor::pushSweepPoint (const SweepPoint& point) noexcept
+{
+    const auto scope = sweepFifo.write (1);   // if the FIFO is full the point is dropped
+
+    if (scope.blockSize1 > 0) sweepFifoData[(size_t) scope.startIndex1] = point;
+    else if (scope.blockSize2 > 0) sweepFifoData[(size_t) scope.startIndex2] = point;
+}
+
 bool AudioPluginAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
     const auto in  = layouts.getMainInputChannelSet();
@@ -339,6 +540,47 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
         kneeFade.setTargetValue (0.0f);   // short fade-out, no click
     }
 
+    // ---------------- Frequency response test requests ----------------
+    if (sweepRequested.exchange (false))
+    {
+        sw        = sweepSetup;
+        swRunId   = sweepRunIdShared.load();
+        swActive  = true;
+        sweepBusy = true;
+        swPos     = 0;
+        impPos    = 0;
+        impPeriod = 0;
+        impPeriodsDone.store (0);
+        impActiveRunId = swRunId;
+        swPhase   = 0.0;
+        swFreq    = sw.f0;
+        // Per-sample step: linear = Hz, logarithmic = factor, inverse = change of 1/f
+        swFreqStep = sw.law == SweepLaw::linear ? (sw.f1 - sw.f0) / (double) sw.sweepLength
+                                                : std::pow (sw.f1 / sw.f0, 1.0 / (double) sw.sweepLength);
+        swSumGen = swSumL = swSumR = swSumFreq = swWeightSum = 0.0;
+        swWinCount = 0;
+        swFade.setCurrentAndTargetValue (0.0f);
+        swClickPeak = 0.0f;
+        swClickPeakPos = 0;
+        swRingPos = 0;
+        swLatency = 0;
+        std::fill (swSentRing.begin(), swSentRing.end(), 0.0f);
+        std::fill (swFreqRing.begin(), swFreqRing.end(), -1.0f);
+
+        // LF-weighted law: per-sample change of 1/f below the crossover, factor above it
+        if (sw.law == SweepLaw::inverse)
+        {
+            swFreqStep   = std::log (2.0) / (sw.cyclesPerOctave * sr);
+            swHighFactor = std::exp (sw.crossover * std::log (2.0) / (sw.cyclesPerOctave * sr));
+        }
+    }
+
+    if (sweepStopRequest.exchange (false) && swActive)
+    {
+        swActive  = false;
+        sweepBusy = false;
+    }
+
     // Read parameters once per block
     const auto srcL       = (ScopeSource) juce::roundToInt (scopeSrcLParam->load());
     const auto srcR       = (ScopeSource) juce::roundToInt (scopeSrcRParam->load());
@@ -350,14 +592,19 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
     const auto kneeOut    = (KneeOutput) juce::roundToInt (kneeOutputParam->load());
     const double kneeDt   = (double) kneeFreqParam->load() / sr;
 
-    // While a knee test runs the input is never passed through: in a hardware
+    // While a knee or sweep test runs the input is never passed through: in a hardware
     // loop (output -> device -> input) that would cause feedback
-    const bool passThru   = passThroughParam->load() > 0.5f && ! kneeActive;
+    const bool passThru   = passThroughParam->load() > 0.5f && ! kneeActive && ! swActive;
+
+    const auto swOut      = (KneeOutput) juce::roundToInt (swOutputParam->load());
+    const bool swToR      = swOut != KneeOutput::left;
+    const bool swToL      = swOut != KneeOutput::right || numOut == 1;
+    const bool impContinuous = swContinuousParam->load() > 0.5f;   // may be switched off during a run (both modes)
 
     smoothedFreq.setTargetValue (genFreqParam->load());
     // The normal generator fades out while a knee test runs, so the test always
     // starts cleanly at the bottom of the sweep
-    smoothedGain.setTargetValue (genOn && ! kneeActive ? juce::Decibels::decibelsToGain (genLevelParam->load()) : 0.0f);
+    smoothedGain.setTargetValue (genOn && ! kneeActive && ! swActive ? juce::Decibels::decibelsToGain (genLevelParam->load()) : 0.0f);
 
     // Output routing: generator or knee test tone
     const auto routeL = [] (bool toL, bool toR, int outs) { return toL || (outs == 1 && toR); };
@@ -461,8 +708,172 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
             }
         }
 
-        // The scope/FFT source "Generator" shows the knee tone while the test runs
-        const float genForScope = kneeOn ? kneeTone : gen;
+        // ---------------- Frequency response sweep ----------------
+        float sweepTone = 0.0f;
+
+        if (swActive && sw.mode == SweepMode::impulse)
+        {
+            // Dirac impulse: one single sample at the start of every interval
+            sweepTone = impPos == 0 ? sw.gain : 0.0f;
+
+            // The first interval is a warm-up and is not used. From the second one on,
+            // the returned signal of each interval is one (periodic) impulse response.
+            if (impPeriod >= 1)
+            {
+                const auto slot = (size_t) ((impPeriod - 1) % impulseSlots);
+                impSlotL[slot][(size_t) impPos] = l;
+                impSlotR[slot][(size_t) impPos] = r;
+            }
+
+            if (++impPos >= sw.interval)
+            {
+                impPos = 0;
+
+                if (impPeriod >= 1)
+                    impPeriodsDone.store (impPeriod, std::memory_order_release);
+
+                ++impPeriod;
+
+                if (! impContinuous && impPeriod > (uint64_t) sw.averages)
+                {
+                    swActive  = false;
+                    sweepBusy = false;
+                }
+            }
+        }
+        else if (swActive)
+        {
+            // Timeline of one sweep run (positions in samples):
+            //   [0, startLeadIn)        click for the latency measurement (first sweep only)
+            //   [startLeadIn, startSw)  lead-in: tone at the start frequency (settling)
+            //   [startSw, endSw)        the sweep itself
+            //   [endSw, total)          tail: wait for the delayed return, fade-out
+            const int64_t startLeadIn = sw.clickLength;
+            const int64_t startSw     = startLeadIn + sw.leadIn;
+            const int64_t endSw       = startSw + sw.sweepLength;
+            const int64_t total       = endSw + sw.tail;
+
+            const bool inClick = swPos < startLeadIn;
+            const bool inSweep = swPos >= startSw && swPos < endSw;
+
+            if (swPos == startLeadIn)
+                swFade.setTargetValue (1.0f);            // fade in the lead-in tone
+            if (swPos == endSw && ! impContinuous)
+                swFade.setTargetValue (0.0f);            // short fade-out at the end frequency
+
+            if (inClick)
+            {
+                // Single-sample click; the strongest returned sample gives the loop latency
+                sweepTone = swPos == 0 ? sw.gain : 0.0f;
+
+                const float v = std::abs (l) + std::abs (r);
+                if (v > swClickPeak) { swClickPeak = v; swClickPeakPos = swPos; }
+
+                if (swPos == startLeadIn - 1)
+                    swLatency = swClickPeak > 1.0e-4f * sw.gain ? (int) swClickPeakPos : 0;   // no return -> 0
+            }
+            else
+            {
+                sweepTone = swFade.getNextValue() * sw.gain * (float) std::sin (juce::MathConstants<double>::twoPi * swPhase);
+                swPhase += swFreq / sr;
+                if (swPhase >= 1.0)
+                    swPhase -= 1.0;
+            }
+
+            // Remember what was sent (tone and frequency) so the return can be compared
+            // with the signal that was sent one loop latency earlier
+            // (indexed with a continuous counter: swPos jumps back in continuous mode)
+            const auto ringIndex = (size_t) (swRingPos & swRingMask);
+            swSentRing[ringIndex] = sweepTone;
+            swFreqRing[ringIndex] = inSweep ? (float) swFreq : -1.0f;   // -1 = not part of the sweep
+
+            // Level tracking: ratio of returned to sent energy per window, both weighted
+            // with a Hann window. Over whole periods the Hann weighting cancels the
+            // ripple of partial cycles, so even windows of only 2..4 periods are accurate.
+            if (! inClick && swRingPos >= swLatency)
+            {
+                const auto delayed = (size_t) ((swRingPos - swLatency) & swRingMask);
+                const float  sent  = swSentRing[delayed];
+                const double freq  = swFreqRing[delayed];
+
+                if (freq > 0.0)
+                {
+                    if (swWinCount == 0)
+                    {
+                        // 4 periods, but no longer than the time the sweep needs for 1/3 octave;
+                        // at least 2 periods (otherwise the level cannot be measured)
+                        const double f        = juce::jmax (1.0, freq);
+                        const double period   = sr / f;
+                        const double maxSmear = (1.0 / 3.0) / juce::jmax (1.0e-6, octavesPerSecond (f, sr)) * sr;
+                        const double length   = juce::jmax (2.0 * period, juce::jmin (4.0 * period, maxSmear));
+                        swWinLength = (int) juce::jlimit (16.0, sr, length);
+                    }
+
+                    const double phaseInWindow = ((double) swWinCount + 0.5) / (double) swWinLength;
+                    const double w = std::pow (std::sin (juce::MathConstants<double>::pi * phaseInWindow), 2.0);
+
+                    swSumGen    += w * sent * sent;
+                    swSumL      += w * l * l;
+                    swSumR      += w * r * r;
+                    swSumFreq   += w * freq;
+                    swWeightSum += w;
+
+                    if (++swWinCount >= swWinLength)
+                    {
+                        const double fAvg = swSumFreq / juce::jmax (1.0e-12, swWeightSum);
+
+                        if (swSumGen > 1.0e-30 && fAvg >= 5.0)
+                            pushSweepPoint ({ (float) fAvg,
+                                              (float) (10.0 * std::log10 (juce::jmax (swSumL, 1.0e-30) / swSumGen)),
+                                              (float) (10.0 * std::log10 (juce::jmax (swSumR, 1.0e-30) / swSumGen)),
+                                              swRunId });
+
+                        swSumGen = swSumL = swSumR = swSumFreq = swWeightSum = 0.0;
+                        swWinCount = 0;
+                    }
+                }
+                else if (swWinCount > 0)
+                {
+                    // Sweep boundary inside a window: drop the incomplete window
+                    swSumGen = swSumL = swSumR = swSumFreq = swWeightSum = 0.0;
+                    swWinCount = 0;
+                }
+            }
+
+            // Advance the frequency
+            if (inSweep)
+            {
+                if (sw.law == SweepLaw::linear)
+                    swFreq += swFreqStep;
+                else if (sw.law == SweepLaw::logarithmic)
+                    swFreq *= swFreqStep;
+                else if (swFreq < sw.crossover)
+                    swFreq = 1.0 / (1.0 / swFreq - swFreqStep);    // constant cycles per octave
+                else
+                    swFreq *= swHighFactor;                         // constant time per octave
+
+                swFreq = juce::jmin (swFreq, sw.f1);
+            }
+
+            // Continuous: start the next sweep right away with a new lead-in
+            // (no new click: the latency is already known)
+            if (swPos == endSw - 1 && impContinuous)
+            {
+                swPos  = startLeadIn - 1;   // becomes startLeadIn below
+                swFreq = sw.f0;
+            }
+
+            ++swRingPos;
+
+            if (++swPos >= total)
+            {
+                swActive  = false;
+                sweepBusy = false;
+            }
+        }
+
+        // The scope/FFT source "Generator" shows the test tone while a test runs
+        const float genForScope = swActive ? sweepTone : (kneeOn ? kneeTone : gen);
         scopeBuffer.push (pick (srcL, l, r, genForScope), pick (srcR, l, r, genForScope));
 
         float oL = passThru ? l : 0.0f;
@@ -475,6 +886,9 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
             if (kneeToR) oR += kneeTone;
         }
 
+        if (swToL) oL += sweepTone;
+        if (swToR) oR += sweepTone;
+
         if (genToL) oL += gen;
         if (genToR) oR += gen;
 
@@ -486,6 +900,12 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
         kneeProgress = (float) ((double) kneePos / (double) kneeLength);
     else if (! kneeRunning.load())
         kneeProgress = 0.0f;
+
+    if (swActive)
+        sweepProgress = sw.mode == SweepMode::impulse
+                            ? (impContinuous ? 0.0f : (float) juce::jlimit (0.0, 1.0, (double) impPeriod / (double) (sw.averages + 1)))
+                            : (float) juce::jlimit (0.0, 1.0, (double) swPos / (double) (sw.clickLength + sw.leadIn + sw.sweepLength + sw.tail));
+    // (in continuous mode the progress shows the position within the current sweep)
 
     for (int ch = 2; ch < numOut; ++ch)
         buffer.clear (ch, 0, numSamples);

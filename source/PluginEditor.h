@@ -4,6 +4,7 @@
 #include "ScopeComponent.h"
 #include "SpectrumComponent.h"
 #include "KneeComponent.h"
+#include "SweepComponent.h"
 #include "DevTestLookAndFeel.h"
 
 using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
@@ -106,6 +107,44 @@ private:
 };
 
 //==============================================================================
+// "Sweep" tab: frequency response (amplitude over frequency), measured either
+// live with a sine sweep or from impulse responses (Dirac impulses).
+//==============================================================================
+class SweepPage final : public juce::Component,
+                        private juce::Timer
+{
+public:
+    explicit SweepPage (AudioPluginAudioProcessor& p);
+    void resized() override;
+
+private:
+    void timerCallback() override;
+
+    AudioPluginAudioProcessor& processor;
+    SweepComponent sweep;
+
+    juce::TextButton startButton { "Start sweep" };
+    juce::Label    modeLabel, lawLabel, endLabel, durationLabel, levelLabel, outputLabel;
+    juce::ComboBox modeBox, lawBox, endBox, outputBox;
+    juce::Slider   durationSlider, levelSlider;
+
+    // Impulse mode settings (shown instead of law and duration); "Continuous" for both modes
+    juce::Label    intervalLabel, averagesLabel;
+    juce::ComboBox intervalBox, averagesBox;
+    juce::ToggleButton continuousButton { "Continuous" };
+
+    // Display settings (right column)
+    juce::Label    rangeLabel, smoothLabel, gateLabel, noteLabel;
+    juce::ComboBox rangeBox, smoothBox, gateBox;
+    juce::ToggleButton normButton { "Normalise to 1 kHz" };
+
+    std::unique_ptr<ComboAttachment>  modeAttach, lawAttach, endAttach, outputAttach, rangeAttach, smoothAttach, gateAttach,
+                                      intervalAttach, averagesAttach;
+    std::unique_ptr<SliderAttachment> durationAttach, levelAttach;
+    std::unique_ptr<ButtonAttachment> normAttach, continuousAttach;
+};
+
+//==============================================================================
 class AudioPluginAudioProcessorEditor final : public juce::AudioProcessorEditor
 {
 public:
@@ -126,10 +165,11 @@ private:
     DevTestLookAndFeel lookAndFeel;
 
     // Tabs
-    juce::TextButton scopeTab { "Scope" }, fftTab { "FFT" }, kneeTab { "Knee" };
+    juce::TextButton scopeTab { "Scope" }, fftTab { "FFT" }, kneeTab { "Knee" }, sweepTab { "Sweep" };
     ScopePage scopePage;
     FftPage   fftPage;
     KneePage  kneePage;
+    SweepPage sweepPage;
 
     // Channels (shared by Scope and FFT)
     juce::GroupComponent channelGroup { {}, "CHANNELS" };
