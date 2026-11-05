@@ -19,19 +19,40 @@ namespace UiHelpers
 {
     inline void setupLabel (juce::Component& parent, juce::Label& label, const juce::String& text)
     {
-        label.setText (text, juce::dontSendNotification);
-        label.setFont (juce::Font (juce::FontOptions (14.0f)));
+        // Labels in capitals, like printed on a hardware front panel
+        label.setText (text.toUpperCase(), juce::dontSendNotification);
+        label.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
         parent.addAndMakeVisible (label);
     }
 
     inline void setupSlider (juce::Component& parent, juce::Slider& slider)
     {
         parent.addAndMakeVisible (slider);
-        slider.setColour (juce::Slider::textBoxTextColourId,       DevTestColours::text);
-        slider.setColour (juce::Slider::textBoxBackgroundColourId, DevTestColours::background);
+        slider.setColour (juce::Slider::textBoxTextColourId,       DevTestColours::accent);   // LED display
+        slider.setColour (juce::Slider::textBoxBackgroundColourId, DevTestColours::text);
         slider.setSliderStyle (juce::Slider::LinearHorizontal);
         slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 96, 24);
         slider.setTextBoxIsEditable (true); // values can be typed in directly, e.g. "440" or "1k"
+    }
+
+    // Block with a dark title bar around related controls (drawn behind them)
+    inline void setupGroup (juce::Component& parent, juce::GroupComponent& group, const juce::String& title)
+    {
+        group.setText (title);
+        group.setInterceptsMouseClicks (false, false);
+        parent.addAndMakeVisible (group, 0);   // z-order 0: behind the controls
+    }
+
+    // Space for the controls inside a block (below the title bar)
+    inline juce::Rectangle<int> groupContent (juce::Rectangle<int> groupBounds)
+    {
+        return groupBounds.reduced (10).withTrimmedTop (16);
+    }
+
+    // Height of a block with the given number of 32 px rows (6 px apart)
+    inline int groupHeight (int rows)
+    {
+        return 26 + rows * 32 + (rows - 1) * 6 + 10;
     }
 
     inline void setupCombo (juce::Component& parent, juce::ComboBox& box,
@@ -55,6 +76,7 @@ public:
 
 private:
     ScopeComponent scope;
+    juce::GroupComponent timeGroup;
     juce::Label  timeLabel;
     juce::Slider timeSlider;
     juce::ToggleButton triggerButton { "Trigger (rising edge)" };
@@ -74,6 +96,7 @@ public:
 
 private:
     SpectrumComponent spectrum;
+    juce::GroupComponent analysisGroup, displayGroup;
     juce::Label    sizeLabel, windowLabel, avgLabel, rangeLabel, maxFreqLabel;
     juce::ComboBox sizeBox, windowBox, avgBox, rangeBox, maxFreqBox;
 
@@ -97,6 +120,7 @@ private:
 
     AudioPluginAudioProcessor& processor;
     KneeComponent knee;
+    juce::GroupComponent signalGroup;
 
     juce::TextButton startButton { "START" };
     juce::Label    waveLabel, freqLabel, durationLabel, outputLabel;
@@ -123,6 +147,7 @@ private:
 
     AudioPluginAudioProcessor& processor;
     SweepComponent sweep;
+    juce::GroupComponent signalGroup, analysisGroup;
 
     juce::TextButton startButton { "START" };
     juce::Label    modeLabel, lawLabel, endLabel, durationLabel, levelLabel, outputLabel;
@@ -161,9 +186,10 @@ private:
 
     AudioPluginAudioProcessor& processor;
     AttRelComponent display;
+    juce::GroupComponent signalGroup, burst1Group, burst2Group;
 
     juce::TextButton startButton { "START" };
-    juce::Label  freqLabel, outputLabel, burst1Label, burst2Label, len1Label, level1Label, len2Label, level2Label;
+    juce::Label  freqLabel, outputLabel, len1Label, level1Label, len2Label, level2Label;
     juce::Slider freqSlider, len1Slider, level1Slider, len2Slider, level2Slider;
     juce::ComboBox outputBox;
 
@@ -239,13 +265,13 @@ public:
     void setWindowControls (std::function<void()> onClose, std::function<void()> onMinimise,
                             std::function<void()> onOptions);
 
-    // Standalone: true for the part of the header that moves the window (title bar
-    // area without the window buttons). Used by the window for the system's own
-    // window dragging (Windows); elsewhere the editor moves the window itself.
+    // Standalone: true for the part of the header that moves the window
+    // (title bar area without the window buttons)
     bool isCaptionArea (juce::Point<int> position) const;
 
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
 
 private:
     void showPage (int index);
@@ -278,8 +304,13 @@ private:
     WindowButton minimiseButton { WindowButton::Type::minimise, DevTestColours::text };
     WindowButton closeButton    { WindowButton::Type::close,    DevTestColours::accent };
     bool hasWindowControls = false;
+    // Moving the borderless window: the position is taken directly from the mouse
+    // pointer on the screen (polled while the button is held), so the window can
+    // never "lose" the mouse, even with fast movements
+    void updateWindowDrag();
     bool draggingWindow = false;
     juce::Point<int> dragStartWindowPos, dragStartMouse;   // screen coordinates
+    juce::TimedCallback dragTimer { [this] { updateWindowDrag(); } };
 
     // Program name in a framed box (text is drawn as a path so it can be centred exactly)
     juce::Path titlePath;

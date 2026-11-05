@@ -81,16 +81,6 @@ namespace
         // Alt+F4 / closing from the task bar
         void userTriedToCloseWindow() override   { juce::JUCEApplication::quit(); }
 
-        // The header of the editor acts as title bar: on Windows the system moves the
-        // window when it is dragged there (like any normal title bar, incl. snapping)
-        WindowControlKind findControlAtPoint (juce::Point<float> position) const override
-        {
-            if (auto* devTestEditor = dynamic_cast<AudioPluginAudioProcessorEditor*> (editor.get()))
-                if (devTestEditor->isCaptionArea (devTestEditor->getLocalPoint (this, position).roundToInt()))
-                    return WindowControlKind::caption;
-
-            return WindowControlKind::client;
-        }
 
     private:
         juce::StandalonePluginHolder& holder;

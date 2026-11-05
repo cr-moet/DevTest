@@ -292,7 +292,7 @@ private:
                                           : juce::String (currentMsPerDiv, 2) + " ms/div";
 
         g.drawText (timeText + "   |   " + juce::String (currentSampleRate / 1000.0, 1) + " kHz",
-                    juce::Rectangle<float> (plot.getX() + 60.0f, y, plot.getWidth() - 160.0f, 16.0f),
+                    juce::Rectangle<float> (plot.getX() + 60.0f, y, juce::jmax (0.0f, plot.getWidth() - 160.0f), 16.0f),
                     juce::Justification::centred);
 
         // Level readout below the grid

@@ -14,6 +14,8 @@ ScopePage::ScopePage (AudioPluginAudioProcessor& p)
     setupSlider (*this, timeSlider);
     addAndMakeVisible (triggerButton);
 
+    setupGroup (*this, timeGroup, "Timebase / Trigger");
+
     timeAttach    = std::make_unique<SliderAttachment> (p.apvts, ParamIDs::timePerDiv, timeSlider);
     triggerAttach = std::make_unique<ButtonAttachment> (p.apvts, ParamIDs::trigger,    triggerButton);
 }
@@ -21,13 +23,15 @@ ScopePage::ScopePage (AudioPluginAudioProcessor& p)
 void ScopePage::resized()
 {
     auto area = getLocalBounds();
-    auto row  = area.removeFromBottom (32);
+    auto block = area.removeFromBottom (groupHeight (1));
     area.removeFromBottom (8);
     scope.setBounds (area);
 
+    timeGroup.setBounds (block);
+    auto row = groupContent (block);
     timeLabel.setBounds (row.removeFromLeft (90));
-    triggerButton.setBounds (row.removeFromRight (200));
-    row.removeFromRight (12);
+    triggerButton.setBounds (row.removeFromRight (220));
+    row.removeFromRight (16);
     timeSlider.setBounds (row);
 }
 
@@ -51,6 +55,9 @@ FftPage::FftPage (AudioPluginAudioProcessor& p)
     setupCombo (*this, rangeBox,  p.apvts, ParamIDs::fftRange);
     setupCombo (*this, maxFreqBox, p.apvts, ParamIDs::fftMaxFreq);
 
+    setupGroup (*this, analysisGroup, "FFT Analysis");
+    setupGroup (*this, displayGroup,  "Display");
+
     sizeAttach   = std::make_unique<ComboAttachment> (p.apvts, ParamIDs::fftSize,    sizeBox);
     windowAttach = std::make_unique<ComboAttachment> (p.apvts, ParamIDs::fftWindow,  windowBox);
     avgAttach    = std::make_unique<ComboAttachment> (p.apvts, ParamIDs::fftAverage, avgBox);
@@ -61,27 +68,34 @@ FftPage::FftPage (AudioPluginAudioProcessor& p)
 void FftPage::resized()
 {
     auto area = getLocalBounds();
-    auto row2 = area.removeFromBottom (32);
-    area.removeFromBottom (6);
-    auto row1 = area.removeFromBottom (32);
+    auto blocks = area.removeFromBottom (groupHeight (2));
     area.removeFromBottom (8);
     spectrum.setBounds (area);
 
-    // Settings in two rows: three cells on top, two below (aligned with the top cells)
-    const int cell = row1.getWidth() / 3;
+    // Left block: FFT analysis settings, right block: display settings
+    auto analysisArea = blocks.removeFromLeft (blocks.getWidth() * 3 / 5);
+    blocks.removeFromLeft (10);
+    analysisGroup.setBounds (analysisArea);
+    displayGroup.setBounds (blocks);
 
-    const auto place = [cell] (juce::Rectangle<int>& row, juce::Label& label, juce::ComboBox& box)
+    const auto place = [] (juce::Rectangle<int> cell, juce::Label& label, juce::ComboBox& box)
     {
-        auto c = row.removeFromLeft (cell).withTrimmedRight (12);
-        label.setBounds (c.removeFromLeft (80));
-        box.setBounds (c);
+        label.setBounds (cell.removeFromLeft (82));
+        box.setBounds (cell);
     };
 
-    place (row1, sizeLabel,    sizeBox);
-    place (row1, windowLabel,  windowBox);
-    place (row1, avgLabel,     avgBox);
-    place (row2, rangeLabel,   rangeBox);
-    place (row2, maxFreqLabel, maxFreqBox);
+    auto a = groupContent (analysisArea);
+    auto aRow1 = a.removeFromTop (32);
+    a.removeFromTop (6);
+    auto aRow2 = a.removeFromTop (32);
+    place (aRow1.removeFromLeft (aRow1.getWidth() / 2).withTrimmedRight (12), sizeLabel, sizeBox);
+    place (aRow1, windowLabel, windowBox);
+    place (aRow2.removeFromLeft (aRow2.getWidth() / 2).withTrimmedRight (12), avgLabel, avgBox);
+
+    auto d = groupContent (blocks);
+    place (d.removeFromTop (32), rangeLabel, rangeBox);
+    d.removeFromTop (6);
+    place (d.removeFromTop (32), maxFreqLabel, maxFreqBox);
 }
 
 //==============================================================================
@@ -123,6 +137,8 @@ KneePage::KneePage (AudioPluginAudioProcessor& p)
     setupSlider (*this, freqSlider);
     setupSlider (*this, durationSlider);
 
+    setupGroup (*this, signalGroup, "Test Signal");
+
     waveAttach     = std::make_unique<ComboAttachment>  (p.apvts, ParamIDs::kneeWave,     waveBox);
     outputAttach   = std::make_unique<ComboAttachment>  (p.apvts, ParamIDs::kneeOutput,   outputBox);
     freqAttach     = std::make_unique<SliderAttachment> (p.apvts, ParamIDs::kneeFreq,     freqSlider);
@@ -147,22 +163,26 @@ void KneePage::resized()
 {
     auto area = getLocalBounds();
 
-    // Right column: START and the settings, stacked (label above each control).
+    // Right column: START and the test signal block.
     // The knee display uses the full height to the left of it.
-    auto column = area.removeFromRight (200);
+    auto column = area.removeFromRight (210);
     area.removeFromRight (12);
     knee.setBounds (area);
 
     startButton.setBounds (column.removeFromTop (36));
-    column.removeFromTop (16);
+    column.removeFromTop (14);
+
+    auto block = column.removeFromTop (26 + 4 * (22 + 28) + 3 * 10 + 10);
+    signalGroup.setBounds (block);
+    auto inner = groupContent (block);
 
     for (auto [label, control] : { std::pair<juce::Label*, juce::Component*> { &waveLabel, &waveBox },
                                    { &freqLabel, &freqSlider }, { &durationLabel, &durationSlider },
                                    { &outputLabel, &outputBox } })
     {
-        label->setBounds (column.removeFromTop (22));
-        control->setBounds (column.removeFromTop (28));
-        column.removeFromTop (10);
+        label->setBounds (inner.removeFromTop (22));
+        control->setBounds (inner.removeFromTop (28));
+        inner.removeFromTop (10);
     }
 }
 
@@ -226,6 +246,9 @@ SweepPage::SweepPage (AudioPluginAudioProcessor& p)
     noteLabel.setJustificationType (juce::Justification::topLeft);
     addAndMakeVisible (noteLabel);
 
+    setupGroup (*this, signalGroup,   "Test Signal");
+    setupGroup (*this, analysisGroup, "Analysis");
+
     modeAttach     = std::make_unique<ComboAttachment>  (p.apvts, ParamIDs::swMode,      modeBox);
     lawAttach      = std::make_unique<ComboAttachment>  (p.apvts, ParamIDs::swLaw,       lawBox);
     endAttach      = std::make_unique<ComboAttachment>  (p.apvts, ParamIDs::swEnd,       endBox);
@@ -277,65 +300,80 @@ void SweepPage::timerCallback()
 void SweepPage::resized()
 {
     auto area = getLocalBounds();
-    auto row2 = area.removeFromBottom (32);
-    area.removeFromBottom (6);
-    auto row1 = area.removeFromBottom (32);
+
+    // Bottom: START + test signal block
+    auto bottom = area.removeFromBottom (groupHeight (2));
     area.removeFromBottom (8);
 
-    // Right column: display settings
-    auto column = area.removeFromRight (150);
-    area.removeFromRight (8);
+    // Right column: analysis / display block
+    auto column = area.removeFromRight (180);
+    area.removeFromRight (10);
     sweep.setBounds (area);
 
-    column.removeFromTop (60);
-    for (auto [label, box] : { std::pair<juce::Label*, juce::ComboBox*> { &rangeLabel, &rangeBox },
-                               { &smoothLabel, &smoothBox }, { &gateLabel, &gateBox } })
+    // ---- Analysis block ----
     {
-        label->setBounds (column.removeFromTop (22));
-        box->setBounds (column.removeFromTop (28));
-        column.removeFromTop (8);
-    }
-    normButton.setBounds (column.removeFromTop (28));
-    column.removeFromTop (4);
-    continuousButton.setBounds (column.removeFromTop (28));
-    column.removeFromTop (8);
-    noteLabel.setBounds (column.removeFromTop (80));
+        column.removeFromTop (40);   // level with the plot frame
+        auto block = column.removeFromTop (26 + 3 * (22 + 28) + 3 * 8 + 2 * 28 + 4 + 10);
+        analysisGroup.setBounds (block);
+        auto inner = groupContent (block);
 
-    // Row 1: start, mode, law, end frequency
-    startButton.setBounds (row1.removeFromLeft (110));
-    row1.removeFromLeft (14);
+        for (auto [label, box] : { std::pair<juce::Label*, juce::ComboBox*> { &rangeLabel, &rangeBox },
+                                   { &smoothLabel, &smoothBox }, { &gateLabel, &gateBox } })
+        {
+            label->setBounds (inner.removeFromTop (22));
+            box->setBounds (inner.removeFromTop (28));
+            inner.removeFromTop (8);
+        }
+        normButton.setBounds (inner.removeFromTop (28));
+        inner.removeFromTop (4);
+        continuousButton.setBounds (inner.removeFromTop (28));
+
+        column.removeFromTop (8);
+        noteLabel.setBounds (column.removeFromTop (80));
+    }
+
+    // ---- START + test signal block ----
+    startButton.setBounds (bottom.removeFromLeft (110).withSizeKeepingCentre (110, 40));
+    bottom.removeFromLeft (12);
+    signalGroup.setBounds (bottom);
+    auto inner = groupContent (bottom);
+    auto row1 = inner.removeFromTop (32);
+    inner.removeFromTop (6);
+    auto row2 = inner.removeFromTop (32);
+
+    // Row 1: mode, law (sweep) or interval (impulse), end frequency
     modeLabel.setBounds (row1.removeFromLeft (46));
-    modeBox.setBounds (row1.removeFromLeft (170));
+    modeBox.setBounds (row1.removeFromLeft (160));
     row1.removeFromLeft (12);
     {
-        auto slot = row1.removeFromLeft (166);
+        auto slot = row1.removeFromLeft (180);
         lawLabel.setBounds (slot.removeFromLeft (36));
         lawBox.setBounds (slot);
     }
     {
-        auto slot = row1.withX (lawLabel.getX()).withWidth (166);
-        intervalLabel.setBounds (slot.removeFromLeft (60));
+        auto slot = row1.withX (lawLabel.getX()).withWidth (180);
+        intervalLabel.setBounds (slot.removeFromLeft (70));
         intervalBox.setBounds (slot);
     }
     row1.removeFromLeft (12);
     endLabel.setBounds (row1.removeFromLeft (26));
     endBox.setBounds (row1.removeFromLeft (juce::jmin (110, row1.getWidth())));
 
-    // Row 2: duration (sweep) or averages + continuous (impulse), level, output
-    const int sliderW = juce::jmax (160, (row2.getWidth() - 70 - 54 - 56 - 100 - 24) / 2);
+    // Row 2: duration (sweep) or averages (impulse), level, output
+    const int sliderW = juce::jmax (130, (row2.getWidth() - 74 - 54 - 56 - 90 - 24) / 2);
     {
-        auto slot = row2.withWidth (70 + sliderW);
-        averagesLabel.setBounds (slot.removeFromLeft (70));
+        auto slot = row2.withWidth (74 + sliderW);
+        averagesLabel.setBounds (slot.removeFromLeft (74));
         averagesBox.setBounds (slot.removeFromLeft (70));
     }
-    durationLabel.setBounds (row2.removeFromLeft (70));
+    durationLabel.setBounds (row2.removeFromLeft (74));
     durationSlider.setBounds (row2.removeFromLeft (sliderW));
     row2.removeFromLeft (12);
     levelLabel.setBounds (row2.removeFromLeft (54));
     levelSlider.setBounds (row2.removeFromLeft (sliderW));
     row2.removeFromLeft (12);
     outputLabel.setBounds (row2.removeFromLeft (56));
-    outputBox.setBounds (row2.removeFromLeft (juce::jmin (100, row2.getWidth())));
+    outputBox.setBounds (row2.removeFromLeft (juce::jmin (90, row2.getWidth())));
 }
 
 //==============================================================================
@@ -369,18 +407,14 @@ AttRelPage::AttRelPage (AudioPluginAudioProcessor& p)
 
     setupLabel (*this, freqLabel,   "Frequency");
     setupLabel (*this, outputLabel, "Output");
-    setupLabel (*this, burst1Label, "Burst 1");
-    setupLabel (*this, burst2Label, "Burst 2");
     setupLabel (*this, len1Label,   "Length");
     setupLabel (*this, level1Label, "Level");
     setupLabel (*this, len2Label,   "Length");
     setupLabel (*this, level2Label, "Level");
 
-    for (auto* l : { &burst1Label, &burst2Label })
-    {
-        l->setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
-        l->setColour (juce::Label::textColourId, DevTestColours::accent);
-    }
+    setupGroup (*this, signalGroup, "Test Signal");
+    setupGroup (*this, burst1Group, "Burst 1");
+    setupGroup (*this, burst2Group, "Burst 2  (% of burst 1)");
 
     for (auto* s : { &freqSlider, &len1Slider, &level1Slider, &len2Slider, &level2Slider })
         setupSlider (*this, *s);
@@ -411,38 +445,42 @@ void AttRelPage::timerCallback()
 void AttRelPage::resized()
 {
     auto area = getLocalBounds();
-    auto row3 = area.removeFromBottom (32);
-    area.removeFromBottom (6);
-    auto row2 = area.removeFromBottom (32);
-    area.removeFromBottom (6);
-    auto row1 = area.removeFromBottom (32);
+    auto bottom = area.removeFromBottom (groupHeight (2));
     area.removeFromBottom (8);
     display.setBounds (area);
 
-    // Row 1: start, frequency, output
-    startButton.setBounds (row1.removeFromLeft (110));
-    row1.removeFromLeft (14);
-    outputBox.setBounds (row1.removeFromRight (100));
-    outputLabel.setBounds (row1.removeFromRight (56));
-    row1.removeFromRight (12);
-    freqLabel.setBounds (row1.removeFromLeft (76));
-    freqSlider.setBounds (row1);
+    // START, then three blocks: test signal, burst 1, burst 2
+    startButton.setBounds (bottom.removeFromLeft (110).withSizeKeepingCentre (110, 40));
+    bottom.removeFromLeft (12);
 
-    // Rows 2 and 3: length and level of each burst
-    const auto burstRow = [] (juce::Rectangle<int> row, juce::Label& title, juce::Label& lenLabel, juce::Slider& len,
-                              juce::Label& levelLabel, juce::Slider& level)
+    const int blockW = (bottom.getWidth() - 20) / 3;
+    auto signalArea = bottom.removeFromLeft (blockW);
+    bottom.removeFromLeft (10);
+    auto burst1Area = bottom.removeFromLeft (blockW);
+    bottom.removeFromLeft (10);
+    auto burst2Area = bottom;
+
+    signalGroup.setBounds (signalArea);
+    burst1Group.setBounds (burst1Area);
+    burst2Group.setBounds (burst2Area);
+
+    // Two rows per block: label left, control right
+    const auto twoRows = [] (juce::Rectangle<int> block, juce::Label& l1, juce::Component& c1,
+                             juce::Label& l2, juce::Component& c2)
     {
-        title.setBounds (row.removeFromLeft (70));
-        const int half = row.getWidth() / 2;
-        auto left = row.removeFromLeft (half).withTrimmedRight (10);
-        lenLabel.setBounds (left.removeFromLeft (52));
-        len.setBounds (left);
-        levelLabel.setBounds (row.removeFromLeft (46));
-        level.setBounds (row);
+        auto inner = groupContent (block);
+        auto row1 = inner.removeFromTop (32);
+        inner.removeFromTop (6);
+        auto row2 = inner.removeFromTop (32);
+        l1.setBounds (row1.removeFromLeft (78));
+        c1.setBounds (row1);
+        l2.setBounds (row2.removeFromLeft (78));
+        c2.setBounds (row2);
     };
 
-    burstRow (row2, burst1Label, len1Label, len1Slider, level1Label, level1Slider);
-    burstRow (row3, burst2Label, len2Label, len2Slider, level2Label, level2Slider);
+    twoRows (signalArea, freqLabel, freqSlider, outputLabel, outputBox);
+    twoRows (burst1Area, len1Label, len1Slider, level1Label, level1Slider);
+    twoRows (burst2Area, len2Label, len2Slider, level2Label, level2Slider);
 }
 
 //==============================================================================
@@ -458,11 +496,8 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
     {
         tab->setClickingTogglesState (true);
         tab->setRadioGroupId (1001);
-        tab->setColour (juce::TextButton::buttonColourId,   DevTestColours::background);
-        tab->setColour (juce::TextButton::buttonOnColourId, DevTestColours::accent);
-        tab->setColour (juce::TextButton::textColourOffId,  DevTestColours::text);
-        tab->setColour (juce::TextButton::textColourOnId,   DevTestColours::background);
-        tab->setConnectedEdges (juce::Button::ConnectedOnBottom);
+        // Hardware-style buttons with LED: the LED of the active tab lights up
+        tab->getProperties().set ("led", true);
         addAndMakeVisible (tab);
     }
     scopeTab.onClick = [this] { if (scopeTab.getToggleState()) showPage (0); };
@@ -566,10 +601,7 @@ bool AudioPluginAudioProcessorEditor::isCaptionArea (juce::Point<int> position) 
     return true;
 }
 
-// Standalone: dragging the header moves the borderless window.
-// On Windows the system does this (the window reports the header as its title bar,
-// see StandaloneApp.cpp), so these mouse events only arrive on other systems.
-// There the window follows the mouse in screen coordinates.
+// Standalone: dragging the header moves the borderless window
 void AudioPluginAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
 {
     draggingWindow = false;
@@ -581,15 +613,42 @@ void AudioPluginAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
     {
         draggingWindow     = true;
         dragStartWindowPos = window->getScreenPosition();
-        dragStartMouse     = e.getScreenPosition();
+        dragStartMouse     = juce::Desktop::getMousePosition();
+        dragTimer.startTimerHz (120);   // keeps following even if mouse events get lost
     }
 }
 
-void AudioPluginAudioProcessorEditor::mouseDrag (const juce::MouseEvent& e)
+void AudioPluginAudioProcessorEditor::mouseDrag (const juce::MouseEvent&)
 {
-    if (draggingWindow)
-        if (auto* window = getTopLevelComponent())
-            window->setTopLeftPosition (dragStartWindowPos + (e.getScreenPosition() - dragStartMouse));
+    updateWindowDrag();
+}
+
+void AudioPluginAudioProcessorEditor::mouseUp (const juce::MouseEvent&)
+{
+    updateWindowDrag();
+    draggingWindow = false;
+    dragTimer.stopTimer();
+}
+
+void AudioPluginAudioProcessorEditor::updateWindowDrag()
+{
+    if (! draggingWindow)
+        return;
+
+    // Mouse button released (also outside the window): stop
+    if (! juce::ModifierKeys::getCurrentModifiersRealtime().isLeftButtonDown())
+    {
+        draggingWindow = false;
+        dragTimer.stopTimer();
+        return;
+    }
+
+    if (auto* window = getTopLevelComponent())
+    {
+        const auto target = dragStartWindowPos + (juce::Desktop::getMousePosition() - dragStartMouse);
+        if (window->getScreenPosition() != target)
+            window->setTopLeftPosition (target);
+    }
 }
 
 //==============================================================================
@@ -602,10 +661,20 @@ void AudioPluginAudioProcessorEditor::layoutTitle()
     constexpr float padding = 6.0f;    // gap between text and frame, equal on all sides
 
     juce::GlyphArrangement glyphs;
-    glyphs.addLineOfText (juce::Font (juce::FontOptions (22.0f, juce::Font::bold)), "DevTest", 0.0f, 0.0f);
+    glyphs.addLineOfText (juce::Font (juce::FontOptions (23.0f, juce::Font::bold)), "DevTest", 0.0f, 0.0f);
 
     titlePath.clear();
     glyphs.createPath (titlePath);
+
+    // Make the lettering extra bold: add an outline stroke around the letters
+    // (the union of letters and outline is used as the cut-out shape)
+    {
+        juce::Path outline;
+        juce::PathStrokeType (0.6f, juce::PathStrokeType::mitered).createStrokedPath (outline, titlePath);
+        titlePath.addPath (outline);
+        titlePath.setUsingNonZeroWinding (true);
+    }
+
     const auto textBounds = titlePath.getBounds();
 
     const float boxW = std::round (textBounds.getWidth()  + 2.0f * (padding + border));
@@ -625,14 +694,20 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
     g.fillAll (background);
     NoiseTexture::draw (g, getLocalBounds());
 
-    // Program name in a framed box
+    // Program name: filled box, the lettering is cut out (background colour + noise)
     g.setColour (text);
-    g.fillPath (titlePath);
-    g.drawRect (titleBox, titleBorder);
+    g.fillRect (titleBox);
+    {
+        juce::Graphics::ScopedSaveState save (g);
+        g.reduceClipRegion (titlePath);
+        g.setColour (background);
+        g.fillRect (titleBox);
+        NoiseTexture::draw (g, titleBox.toNearestInt());
+    }
 
-    g.setColour (text.withAlpha (0.8f));
-    g.setFont (juce::Font (juce::FontOptions (13.0f)));
-    g.drawText ("Measurement & Test Tool",
+    g.setColour (text.withAlpha (0.75f));
+    g.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
+    g.drawText ("MEASUREMENT & TEST TOOL",
                 juce::Rectangle<float> (titleBox.getRight() + 14.0f, titleBox.getY(), 300.0f, titleBox.getHeight()),
                 juce::Justification::centredLeft);
 
@@ -697,7 +772,7 @@ void AudioPluginAudioProcessorEditor::resized()
     panel.removeFromTop (30 + 8 + 24 - 7);
     auto genArea = panel.removeFromTop (28 + 5 * (rowH + gap) + 8);
     genGroup.setBounds (genArea);
-    genArea = genArea.reduced (12).withTrimmedTop (14);
+    genArea = genArea.reduced (12).withTrimmedTop (18);
 
     genOnButton.setBounds (genArea.removeFromTop (rowH));
     genArea.removeFromTop (gap);

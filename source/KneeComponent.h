@@ -67,7 +67,7 @@ public:
                     const float xt = toScreen (r->thresholdDb, minDb, plot).x;
 
                     g.setColour (colour.withAlpha (0.07f));
-                    g.fillRect (juce::Rectangle<float> (x0, plot.getY(), x1 - x0, plot.getHeight()));
+                    g.fillRect (juce::Rectangle<float> (x0, plot.getY(), juce::jmax (0.0f, x1 - x0), plot.getHeight()));
 
                     g.setColour (colour.withAlpha (0.35f));
                     g.drawLine (xt, plot.getY(), xt, plot.getBottom(), 1.0f);
@@ -377,7 +377,7 @@ private:
         const auto valueOut = [&] (const juce::String& label, const juce::String& value, float spacingAfter = 18.0f)
         {
             g.drawText (label, juce::Rectangle<float> (area.getX(), y, 74.0f, 16.0f), juce::Justification::centredLeft);
-            g.drawText (value, juce::Rectangle<float> (area.getX() + 74.0f, y, area.getWidth() - 74.0f, 16.0f),
+            g.drawText (value, juce::Rectangle<float> (area.getX() + 74.0f, y, juce::jmax (0.0f, area.getWidth() - 74.0f), 16.0f),
                         juce::Justification::centredLeft);
             y += spacingAfter;
         };
