@@ -507,11 +507,11 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
         tab->getProperties().set ("led", true);
         addAndMakeVisible (tab);
     }
-    scopeTab.onClick = [this] { if (scopeTab.getToggleState()) showPage (0); };
-    fftTab.onClick   = [this] { if (fftTab.getToggleState())   showPage (1); };
-    kneeTab.onClick  = [this] { if (kneeTab.getToggleState())  showPage (2); };
-    sweepTab.onClick = [this] { if (sweepTab.getToggleState()) showPage (3); };
-    attRelTab.onClick = [this] { if (attRelTab.getToggleState()) showPage (4); };
+    scopeTab.onClick = [this] { if (scopeTab.getToggleState()) switchPage (0); };
+    fftTab.onClick   = [this] { if (fftTab.getToggleState())   switchPage (1); };
+    kneeTab.onClick  = [this] { if (kneeTab.getToggleState())  switchPage (2); };
+    sweepTab.onClick = [this] { if (sweepTab.getToggleState()) switchPage (3); };
+    attRelTab.onClick = [this] { if (attRelTab.getToggleState()) switchPage (4); };
 
     addChildComponent (scopePage);
     addChildComponent (fftPage);
@@ -591,6 +591,25 @@ AudioPluginAudioProcessorEditor::~AudioPluginAudioProcessorEditor()
         delete calibrationWindow.getComponent();
 
     setLookAndFeel (nullptr);
+}
+
+// Tab clicked by the user: stop what belongs to the page that is left, then show the new page.
+// The generator may keep running between Scope and FFT; every other change switches it off.
+// Running tests (knee, sweep / impulse, attack/release) stop when their page is left.
+void AudioPluginAudioProcessorEditor::switchPage (int index)
+{
+    if (index == currentPage)
+        return;
+
+    if (index > 1)
+        if (auto* genOn = processorRef.apvts.getParameter (ParamIDs::genOn))
+            genOn->setValueNotifyingHost (0.0f);
+
+    if (processorRef.isKneeTestRunning())  processorRef.stopKneeTest();
+    if (processorRef.isSweepRunning())     processorRef.stopSweepTest();
+    if (processorRef.isBurstRunning())     processorRef.stopBurstTest();
+
+    showPage (index);
 }
 
 void AudioPluginAudioProcessorEditor::showPage (int index)

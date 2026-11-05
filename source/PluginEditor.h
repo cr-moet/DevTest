@@ -297,6 +297,7 @@ public:
 
 private:
     void showPage (int index);
+    void switchPage (int index);   // tab clicked: stops generator / tests, see .cpp
     void layoutTitle();
     void showOptionsMenu();
     void showCalibration();
