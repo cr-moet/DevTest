@@ -47,8 +47,9 @@ public:
 
             // 1:1 reference line (bypass)
             juce::Path diagonal;
-            diagonal.startNewSubPath (toScreen (minDb, minDb, plot));
-            diagonal.lineTo (toScreen (maxInDb, maxInDb, plot));
+            // (in dBu: real unity gain from the calibrated output to the calibrated input)
+            diagonal.startNewSubPath (toView (xLo(), xLo(), plot));
+            diagonal.lineTo (toView (xHi(), xHi(), plot));
 
             juce::Path dashed;
             const float dashes[] = { 6.0f, 5.0f };
@@ -62,9 +63,10 @@ public:
                 if (r->valid && r->hasKnee)
                 {
                     const auto colour = r == &resultL ? traceL : traceR;
-                    const float x0 = toScreen (r->thresholdDb - r->kneeWidthDb * 0.5f, minDb, plot).x;
-                    const float x1 = toScreen (r->thresholdDb + r->kneeWidthDb * 0.5f, minDb, plot).x;
-                    const float xt = toScreen (r->thresholdDb, minDb, plot).x;
+                    const float t  = r->thresholdDb + offX();
+                    const float x0 = toView (t - r->kneeWidthDb * 0.5f, yLo(), plot).x;
+                    const float x1 = toView (t + r->kneeWidthDb * 0.5f, yLo(), plot).x;
+                    const float xt = toView (t, yLo(), plot).x;
 
                     g.setColour (colour.withAlpha (0.07f));
                     g.fillRect (juce::Rectangle<float> (x0, plot.getY(), juce::jmax (0.0f, x1 - x0), plot.getHeight()));
@@ -128,11 +130,30 @@ private:
                                        (float) getWidth() - plot.getRight() - 28.0f, plot.getHeight());
     }
 
-    juce::Point<float> toScreen (float inDb, float outDb, juce::Rectangle<float> plot) const
+    // Display units: dBFS, or dBu with the calibration. The sent level (x) uses the
+    // calibration of the selected output (L for "L + R"), the returned levels (y)
+    // that of input L or R.
+    float offX() const
     {
-        const float x = plot.getX() + plot.getWidth() * (inDb - minDb) / (maxInDb - minDb);
-        const float y = plot.getBottom() - plot.getHeight() * (juce::jlimit (minDb - 20.0f, maxOutDb + 20.0f, outDb) - minDb)
-                                               / (maxOutDb - minDb);
+        const int choice = juce::roundToInt (processor.apvts.getRawParameterValue (ParamIDs::kneeOutput)->load());
+        return processor.outputOffsetDb (choice == 1 ? 1 : 0);
+    }
+    float offY (bool left) const  { return processor.inputOffsetDb (left ? 0 : 1); }
+
+    // Axis ranges in display units (always 60 dB wide). Both axes use the range of
+    // the sent level, so the 1:1 line (unity gain) is always the diagonal of the plot,
+    // also in dBu when inputs and outputs have different full-scale levels.
+    float xLo() const  { return minDb    + offX(); }
+    float xHi() const  { return maxInDb  + offX(); }
+    float yLo() const  { return minDb    + offX(); }
+    float yHi() const  { return maxOutDb + offX(); }
+
+    // Point in display units -> screen
+    juce::Point<float> toView (float inLevel, float outLevel, juce::Rectangle<float> plot) const
+    {
+        const float x = plot.getX() + plot.getWidth() * (inLevel - xLo()) / (xHi() - xLo());
+        const float y = plot.getBottom() - plot.getHeight() * (juce::jlimit (yLo() - 20.0f, yHi() + 20.0f, outLevel) - yLo())
+                                               / (yHi() - yLo());
         return { x, y };
     }
 
@@ -272,15 +293,18 @@ private:
         if (points.size() < 2)
             return;
 
+        const float ox = offX(), oy = offY (left);
+        const auto view = [&] (const KneePoint& p) { return toView (p.inputDb + ox, outOf (p, left) + oy, plot); };
+
         juce::Path curve;
-        curve.startNewSubPath (toScreen (points[0].inputDb, outOf (points[0], left), plot));
+        curve.startNewSubPath (view (points[0]));
         for (size_t i = 1; i < points.size(); ++i)
-            curve.lineTo (toScreen (points[i].inputDb, outOf (points[i], left), plot));
+            curve.lineTo (view (points[i]));
 
         g.setColour (colour);
         g.strokePath (curve, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved));
 
-        const auto last = toScreen (points.back().inputDb, outOf (points.back(), left), plot);
+        const auto last = view (points.back());
         g.fillEllipse (juce::Rectangle<float> (7.0f, 7.0f).withCentre (last));
     }
 
@@ -290,57 +314,73 @@ private:
 
         g.setFont (juce::Font (juce::FontOptions (11.0f)));
 
+        const float x0 = xLo(), x1 = xHi(), y0 = yLo(), y1 = yHi();
+        const auto xPos = [&] (float v) { return toView (v, y0, plot).x; };
+        const auto yPos = [&] (float v) { return toView (x0, v, plot).y; };
+
         // Fine dashed grid in 1 dB steps (the 10 dB lines are drawn on top).
         // Each 1 dB line gets one dash per 1 dB cell, centred between the crossings,
         // so the dashes of horizontal and vertical lines do not form diagonal patterns.
+        // In dBu the lines lie on whole dBu values, so the cells at the edges can be smaller.
         {
-            const int   numSteps = (int) (maxInDb - minDb);
-            const float cellW = plot.getWidth()  / (float) numSteps;
-            const float cellH = plot.getHeight() / (float) numSteps;
+            std::vector<float> xCross { plot.getX() }, yCross { plot.getY() };
+            std::vector<float> xFine, yFine;
+
+            for (int v = (int) std::ceil (x0 + 0.01f); (float) v < x1 - 0.01f; ++v)
+            {
+                xCross.push_back (xPos ((float) v));
+                if (v % 10 != 0) xFine.push_back (xPos ((float) v));
+            }
+            for (int v = (int) std::floor (y1 - 0.01f); (float) v > y0 + 0.01f; --v)   // top to bottom
+            {
+                yCross.push_back (yPos ((float) v));
+                if (v % 10 != 0) yFine.push_back (yPos ((float) v));
+            }
+            xCross.push_back (plot.getRight());
+            yCross.push_back (plot.getBottom());
 
             juce::Path fine;
-            for (int i = 1; i < numSteps; ++i)
-            {
-                if (i % 10 == 0)
-                    continue;
-
-                const float x = plot.getX() + cellW * (float) i;
-                const float y = plot.getY() + cellH * (float) i;
-
-                for (int k = 0; k < numSteps; ++k)
+            for (auto x : xFine)
+                for (size_t k = 0; k + 1 < yCross.size(); ++k)
                 {
-                    const float y0 = plot.getY() + cellH * ((float) k + 0.3f);
-                    const float x0 = plot.getX() + cellW * ((float) k + 0.3f);
-                    fine.startNewSubPath (x, y0);  fine.lineTo (x, y0 + cellH * 0.4f);
-                    fine.startNewSubPath (x0, y);  fine.lineTo (x0 + cellW * 0.4f, y);
+                    const float a = yCross[k], b = yCross[k + 1];
+                    fine.startNewSubPath (x, a + 0.3f * (b - a));  fine.lineTo (x, a + 0.7f * (b - a));
                 }
-            }
+            for (auto y : yFine)
+                for (size_t k = 0; k + 1 < xCross.size(); ++k)
+                {
+                    const float a = xCross[k], b = xCross[k + 1];
+                    fine.startNewSubPath (a + 0.3f * (b - a), y);  fine.lineTo (a + 0.7f * (b - a), y);
+                }
 
             g.setColour (text.withAlpha (0.16f));
             g.strokePath (fine, juce::PathStrokeType (0.7f));
         }
 
-        // Vertical lines: input level
-        for (int db = (int) minDb; db <= (int) maxInDb; db += 10)
+        const bool dbu = processor.isUnitDbu();
+        const auto label = [] (int db) { return (db > 0 ? "+" : "") + juce::String (db); };
+
+        // Vertical lines: input level (every 10 dB)
+        for (int db = (int) std::ceil (x0 / 10.0f - 0.001f) * 10; (float) db <= x1 + 0.001f; db += 10)
         {
-            const float x = toScreen ((float) db, minDb, plot).x;
-            g.setColour (db == 0 ? gridStrong : grid);
+            const float x = xPos ((float) db);
+            g.setColour (! dbu && db == 0 ? gridStrong : grid);
             g.drawLine (x, plot.getY(), x, plot.getBottom(), 1.0f);
 
             g.setColour (text.withAlpha (0.7f));
-            g.drawText (juce::String (db), juce::Rectangle<float> (x - 20.0f, plot.getBottom() + 2.0f, 40.0f, 14.0f),
+            g.drawText (label (db), juce::Rectangle<float> (x - 20.0f, plot.getBottom() + 2.0f, 40.0f, 14.0f),
                         juce::Justification::centred);
         }
 
         // Horizontal lines: output level
-        for (int db = (int) minDb; db <= (int) maxOutDb; db += 10)
+        for (int db = (int) std::ceil (y0 / 10.0f - 0.001f) * 10; (float) db <= y1 + 0.001f; db += 10)
         {
-            const float y = toScreen (minDb, (float) db, plot).y;
-            g.setColour (db == 0 ? gridStrong : grid);
+            const float y = yPos ((float) db);
+            g.setColour (! dbu && db == 0 ? gridStrong : grid);
             g.drawLine (plot.getX(), y, plot.getRight(), y, 1.0f);
 
             g.setColour (text.withAlpha (0.7f));
-            g.drawText ((db > 0 ? "+" : "") + juce::String (db),
+            g.drawText (label (db),
                         juce::Rectangle<float> (plot.getX() - 40.0f, y - 7.0f, 36.0f, 14.0f),
                         juce::Justification::centredRight);
         }
@@ -348,13 +388,14 @@ private:
         // Axis titles
         g.setColour (text);
         g.setFont (juce::Font (juce::FontOptions (12.0f)));
-        g.drawText ("Input (dBFS)", juce::Rectangle<float> (plot.getX(), plot.getBottom() + 16.0f, plot.getWidth(), 16.0f),
+        const auto unit = processor.getLevelUnit();
+        g.drawText ("Input (" + unit + ")", juce::Rectangle<float> (plot.getX(), plot.getBottom() + 16.0f, plot.getWidth(), 16.0f),
                     juce::Justification::centred);
 
         juce::Graphics::ScopedSaveState save (g);
         g.addTransform (juce::AffineTransform::rotation (-juce::MathConstants<float>::halfPi,
                                                          plot.getX() - 46.0f, plot.getCentreY()));
-        g.drawText ("Output (dBFS)", juce::Rectangle<float> (plot.getX() - 46.0f - 60.0f, plot.getCentreY() - 8.0f, 120.0f, 16.0f),
+        g.drawText ("Output (" + unit + ")", juce::Rectangle<float> (plot.getX() - 46.0f - 60.0f, plot.getCentreY() - 8.0f, 120.0f, 16.0f),
                     juce::Justification::centred);
     }
 
@@ -392,7 +433,9 @@ private:
 
         g.setFont (juce::Font (juce::FontOptions (12.0f)));
         g.setColour (text);
-        valueOut ("Input", points.empty() ? juce::String ("--") : fmt (points.back().inputDb) + " dBFS", 34.0f);
+        const auto unit = " " + processor.getLevelUnit();
+        const float ox  = offX();
+        valueOut ("Input", points.empty() ? juce::String ("--") : fmt (points.back().inputDb + ox) + unit, 34.0f);
 
         // One block per channel
         for (int ch = 0; ch < 2; ++ch)
@@ -408,20 +451,21 @@ private:
 
             if (! points.empty())
             {
-                const float out = outOf (points.back(), left);
-                valueOut ("Output", fmt (out) + " dBFS");
-                valueOut ("Gain",   fmt (out - points.back().inputDb) + " dB");
+                // In dBu the gain is the real gain of the device under test
+                const float out = outOf (points.back(), left) + offY (left);
+                valueOut ("Output", fmt (out) + unit);
+                valueOut ("Gain",   fmt (out - (points.back().inputDb + ox)) + " dB");
             }
 
             if (r.valid && ! running)
             {
                 const float ratio = r.slopeTop > 0.02f ? 1.0f / r.slopeTop : 0.0f;
-                valueOut ("Threshold", r.hasKnee ? fmt (r.thresholdDb) + " dBFS" : juce::String ("--"));
+                valueOut ("Threshold", r.hasKnee ? fmt (r.thresholdDb + ox) + unit : juce::String ("--"));
                 valueOut ("Knee",      ! r.hasKnee ? juce::String ("--")
                                          : r.kneeWidthDb < 0.5f ? juce::String ("hard")
                                                                 : juce::String (r.kneeWidthDb, 1) + " dB (soft)");
                 valueOut ("Ratio",     ratio > 0.0f ? juce::String (ratio, 1) + ":1" : juce::String ("inf:1"));
-                valueOut ("1 dB GR",   r.hasGr1 ? fmt (r.gr1Db) + " dBFS" : juce::String ("--"));
+                valueOut ("1 dB GR",   r.hasGr1 ? fmt (r.gr1Db + ox) + unit : juce::String ("--"));
                 valueOut ("Max GR",    juce::String (r.maxGainReduction, 1) + " dB");
             }
 

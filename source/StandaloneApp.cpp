@@ -11,6 +11,7 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "PluginEditor.h"
+#include "DevTestDialog.h"
 
 // JUCE's standalone helper classes (StandalonePluginHolder: audio device, settings)
 #include <juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h>
@@ -20,6 +21,67 @@
 
 namespace
 {
+    //==========================================================================
+    // Audio settings (device, sample rate, buffer size, channels) for the
+    // DevTest dialog; same content as JUCE's standard standalone dialog
+    class AudioSettingsComponent final : public juce::Component
+    {
+    public:
+        AudioSettingsComponent (juce::StandalonePluginHolder& h, int maxInputs, int maxOutputs)
+            : holder (h),
+              deviceSelector (h.deviceManager, 0, maxInputs, 0, maxOutputs, false, false, true, false)
+        {
+            addAndMakeVisible (deviceSelector);
+
+            muteButton.setClickingTogglesState (true);
+            muteButton.getToggleStateValue().referTo (holder.getMuteInputValue());
+            if (holder.getProcessorHasPotentialFeedbackLoop())
+                addAndMakeVisible (muteButton);
+
+            setSize (520, 400);
+            setToRecommendedSize();
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (DevTestColours::background);
+            NoiseTexture::draw (g, getLocalBounds());
+        }
+
+        void resized() override
+        {
+            const juce::ScopedValueSetter<bool> svs (isResizing, true);
+            auto r = getLocalBounds().reduced (0, 8);
+
+            if (muteButton.isVisible())
+            {
+                auto row = r.removeFromTop (deviceSelector.getItemHeight());
+                muteButton.setBounds (row.withTrimmedLeft (row.proportionOfWidth (0.35f)).withWidth (row.proportionOfWidth (0.60f)));
+                r.removeFromTop (deviceSelector.getItemHeight() / 2);
+            }
+
+            deviceSelector.setBounds (r);
+        }
+
+        void childBoundsChanged (juce::Component* child) override
+        {
+            if (! isResizing && child == &deviceSelector)
+                setToRecommendedSize();
+        }
+
+    private:
+        void setToRecommendedSize()
+        {
+            const int extra = muteButton.isVisible() ? deviceSelector.getItemHeight() + deviceSelector.getItemHeight() / 2 : 0;
+            setSize (getWidth(), deviceSelector.getHeight() + extra + 16);
+        }
+
+        juce::StandalonePluginHolder& holder;
+        juce::AudioDeviceSelectorComponent deviceSelector;
+        juce::ToggleButton muteButton { "Mute audio input (feedback loop)" };
+        bool isResizing = false;
+    };
+
     //==========================================================================
     // Borderless main window that contains only the plugin editor
     class DevTestWindow final : public juce::ResizableWindow
@@ -41,7 +103,7 @@ namespace
                 devTestEditor->setWindowControls (
                     [] { juce::JUCEApplication::quit(); },              // close
                     [this] { setMinimised (true); },                     // minimise
-                    [this] { holder.showAudioSettingsDialog(); });       // options
+                    [this] { showAudioSettings(); });                    // options menu
             }
 
             setContentNonOwned (editor.get(), true);
@@ -80,6 +142,16 @@ namespace
 
         // Alt+F4 / closing from the task bar
         void userTriedToCloseWindow() override   { juce::JUCEApplication::quit(); }
+
+        // Audio settings in the DevTest dialog (instead of the standard Windows dialog)
+        void showAudioSettings()
+        {
+            int maxInputs = 2, maxOutputs = 2;
+            if (auto* bus = holder.processor->getBus (true, 0))   maxInputs  = juce::jmax (0, bus->getDefaultLayout().size());
+            if (auto* bus = holder.processor->getBus (false, 0))  maxOutputs = juce::jmax (0, bus->getDefaultLayout().size());
+
+            DevTestDialog::show ("Audio Settings", std::make_unique<AudioSettingsComponent> (holder, maxInputs, maxOutputs), this);
+        }
 
 
     private:

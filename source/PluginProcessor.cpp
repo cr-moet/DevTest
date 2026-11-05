@@ -391,6 +391,15 @@ void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int)
     kneeRunning = false;
     kneeWinLength = juce::jmax (1, (int) (sampleRate * 0.02));   // 20 ms per measured point
 
+    // Knee latency compensation: up to 500 ms loop latency
+    {
+        size_t size = 1;
+        while ((double) size < sampleRate * 0.6) size <<= 1;
+        kneeSentRing.assign (size, 0.0f);
+        kneeLevelRing.assign (size, kneeNoLevel);
+        kneeRingMask = size - 1;
+    }
+
     // A running frequency response test is aborted as well
     swFade.reset (sampleRate, 0.005);
 
@@ -453,10 +462,22 @@ void AudioPluginAudioProcessor::startKneeOnAudioThread (double sr) noexcept
     kneePos        = 0;
     kneeLength     = juce::jmax ((int64_t) 1, (int64_t) (kneeDurationParam->load() * sr));
 
+    // First a single click: the strongest returned sample gives the loop latency
+    // (interface + device, up to 500 ms).
+    kneeStage        = KneeStage::click;
+    kneeClickPos     = 0;
+    kneeClickLength  = (int64_t) (0.5 * sr);
+    kneeClickPeak    = 0.0f;
+    kneeClickPeakPos = 0;
+    kneeLatency      = 0;
+    kneeTailLeft     = 0;
+    kneeRingPos      = 0;
+    std::fill (kneeSentRing.begin(),  kneeSentRing.end(),  0.0f);
+    std::fill (kneeLevelRing.begin(), kneeLevelRing.end(), kneeNoLevel);
+
     // Lead-in: the sweep starts 500 ms "early", below the start level, and rises
     // continuously. Measuring only begins when the tone reaches kneeStartDb. This covers
-    // the fade-in and the latency of the loop (interface + device) without a jump and
-    // without a constant-level phase.
+    // the fade-in without a jump and without a constant-level phase.
     kneePreRoll    = (int64_t) (0.5 * sr);
     kneePhase      = 0.0;
     kneeSumGen     = 0.0;
@@ -464,7 +485,7 @@ void AudioPluginAudioProcessor::startKneeOnAudioThread (double sr) noexcept
     kneeSumRetR    = 0.0;
     kneeSumLevelDb = 0.0;
     kneeWinCount   = 0;
-    kneeFade.setTargetValue (1.0f);
+    kneeFade.setCurrentAndTargetValue (0.0f);   // the tone fades in after the click
 }
 
 void AudioPluginAudioProcessor::pushKneePoint (const KneePoint& point) noexcept
@@ -787,6 +808,11 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
     float* outR = numOut > 1 ? buffer.getWritePointer (1) : nullptr;
 
 
+    const bool  calTone = calToneOn.load();
+    const float calGainL = calToneGain[0].load();
+    const float calGainR = calToneGain[1].load();
+    double sumSqL = 0.0, sumSqR = 0.0;
+
     for (int i = 0; i < numSamples; ++i)
     {
         // Read the input first, because input and output share the same buffer
@@ -807,57 +833,101 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
 
         if (kneeOn)
         {
-            float levelDb = 0.0f;
+            float levelDb   = kneeNoLevel;   // level of this sample, kneeNoLevel = not measured
+            bool  advance   = false;
 
-            if (kneeActive)
+            if (kneeActive && kneeStage == KneeStage::click)
             {
-                // Same slope during the lead-in (kneePreRoll > 0) and the sweep itself
-                const double position = (double) kneePos - (double) kneePreRoll;
-                levelDb = kneeStartDb + (kneeEndDb - kneeStartDb) * (float) (position / (double) kneeLength);
-                kneeLevelGain = juce::Decibels::decibelsToGain (levelDb, -200.0f);
-            }
+                // Latency measurement: single click, then wait for the strongest return
+                kneeTone = kneeClickPos == 0 ? kneeClickGain : 0.0f;
 
-            kneeTone = fade * kneeLevelGain * renderWave (kneeWave, kneePhase, kneeDt);
-            kneePhase += kneeDt;
-            if (kneePhase >= 1.0)
-                kneePhase -= 1.0;
+                const float v = std::abs (l) + std::abs (r);
+                if (v > kneeClickPeak) { kneeClickPeak = v; kneeClickPeakPos = kneeClickPos; }
 
-            if (kneeActive && kneePreRoll > 0)
-            {
-                --kneePreRoll;   // lead-in: tone is still below the start level, no measurement
-            }
-            else if (kneeActive)
-            {
-                // Measure sent and returned energy (inputs L and R at the same time)
-                // over 20 ms windows. The output level is given relative to the input
-                // level (same detector for both), so a device in bypass gives a perfect
-                // diagonal for every waveform.
-                kneeSumGen     += (double) kneeTone * kneeTone;
-                kneeSumRetL    += (double) l * l;
-                kneeSumRetR    += (double) r * r;
-                kneeSumLevelDb += levelDb;
-
-                if (++kneeWinCount >= kneeWinLength)
+                if (++kneeClickPos >= kneeClickLength)
                 {
-                    if (kneeSumGen > 1.0e-30)
+                    kneeLatency = kneeClickPeak > 1.0e-4f * kneeClickGain ? (int) kneeClickPeakPos : 0;   // no return -> 0
+                    kneeStage   = KneeStage::sweep;
+                    kneeFade.setTargetValue (1.0f);
+                }
+            }
+            else
+            {
+                if (kneeActive && kneeStage == KneeStage::sweep)
+                {
+                    // Same slope during the lead-in (kneePreRoll > 0) and the sweep itself
+                    const double position = (double) kneePos - (double) kneePreRoll;
+                    const float  db = kneeStartDb + (kneeEndDb - kneeStartDb) * (float) (position / (double) kneeLength);
+                    kneeLevelGain = juce::Decibels::decibelsToGain (db, -200.0f);
+
+                    if (kneePreRoll > 0)
+                        --kneePreRoll;   // lead-in: tone is still below the start level, no measurement
+                    else
                     {
-                        const float inDb  = (float) (kneeSumLevelDb / kneeWinCount);
-                        const float gainL = (float) (10.0 * std::log10 (juce::jmax (kneeSumRetL, 1.0e-30) / kneeSumGen));
-                        const float gainR = (float) (10.0 * std::log10 (juce::jmax (kneeSumRetR, 1.0e-30) / kneeSumGen));
-                        pushKneePoint ({ inDb, inDb + gainL, inDb + gainR, kneeRunId });
+                        levelDb = db;
+                        advance = true;
                     }
-
-                    kneeSumGen = kneeSumRetL = kneeSumRetR = kneeSumLevelDb = 0.0;
-                    kneeWinCount = 0;
                 }
 
-                if (++kneePos >= kneeLength)
+                // (in the tail the tone stays at the end level until the delayed return is measured)
+                kneeTone = fade * kneeLevelGain * renderWave (kneeWave, kneePhase, kneeDt);
+                kneePhase += kneeDt;
+                if (kneePhase >= 1.0)
+                    kneePhase -= 1.0;
+            }
+
+            // Remember what was sent; the return is compared with the tone sent one loop
+            // latency earlier. Without this the rising level would make every returned
+            // point too low by (slope x latency), e.g. 1 dB at 12 dB/s and 80 ms.
+            const auto ringIndex = (size_t) kneeRingPos & kneeRingMask;
+            kneeSentRing[ringIndex]  = kneeTone;
+            kneeLevelRing[ringIndex] = levelDb;
+
+            if (kneeActive && kneeRingPos >= (int64_t) kneeLatency)
+            {
+                const auto delayed  = (size_t) (kneeRingPos - kneeLatency) & kneeRingMask;
+                const float sentDb  = kneeLevelRing[delayed];
+
+                if (sentDb > kneeNoLevel + 1.0f)
                 {
-                    // Sweep finished: fade out the tone
-                    kneeActive  = false;
-                    kneeRunning = false;
-                    kneeFade.setTargetValue (0.0f);
+                    // Measure sent and returned energy (inputs L and R at the same time)
+                    // over 20 ms windows. The output level is given relative to the input
+                    // level (same detector for both), so a device in bypass gives a perfect
+                    // diagonal for every waveform.
+                    const float sent = kneeSentRing[delayed];
+                    kneeSumGen     += (double) sent * sent;
+                    kneeSumRetL    += (double) l * l;
+                    kneeSumRetR    += (double) r * r;
+                    kneeSumLevelDb += sentDb;
+
+                    if (++kneeWinCount >= kneeWinLength)
+                    {
+                        if (kneeSumGen > 1.0e-30)
+                        {
+                            const float inDb  = (float) (kneeSumLevelDb / kneeWinCount);
+                            const float gainL = (float) (10.0 * std::log10 (juce::jmax (kneeSumRetL, 1.0e-30) / kneeSumGen));
+                            const float gainR = (float) (10.0 * std::log10 (juce::jmax (kneeSumRetR, 1.0e-30) / kneeSumGen));
+                            pushKneePoint ({ inDb, inDb + gainL, inDb + gainR, kneeRunId });
+                        }
+
+                        kneeSumGen = kneeSumRetL = kneeSumRetR = kneeSumLevelDb = 0.0;
+                        kneeWinCount = 0;
+                    }
                 }
+            }
+            ++kneeRingPos;
+
+            if (advance && ++kneePos >= kneeLength)
+            {
+                // Sweep finished: hold the end level until the last returned window is measured
+                kneeStage    = KneeStage::tail;
+                kneeTailLeft = (int64_t) kneeLatency + kneeWinLength + 1;
+            }
+            else if (kneeActive && kneeStage == KneeStage::tail && --kneeTailLeft <= 0)
+            {
+                kneeActive  = false;
+                kneeRunning = false;
+                kneeFade.setTargetValue (0.0f);   // fade out the tone
             }
         }
 
@@ -1093,8 +1163,34 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
         if (genToL) oL += gen;
         if (genToR) oR += gen;
 
+        // Calibration reference tone replaces everything else
+        if (calTone)
+        {
+            const float tone = (float) std::sin (juce::MathConstants<double>::twoPi * calTonePhase);
+            calTonePhase += 1000.0 / sr;
+            if (calTonePhase >= 1.0)
+                calTonePhase -= 1.0;
+            oL = calGainL * tone;
+            oR = calGainR * tone;
+        }
+
+        sumSqL += (double) l * (double) l;
+        sumSqR += (double) r * (double) r;
+
         if (outL != nullptr) outL[i] = oL;
         if (outR != nullptr) outR[i] = oR;
+    }
+
+    // Input meter for the calibration (time constant about 0.3 s)
+    if (numSamples > 0)
+    {
+        const float a = 1.0f - (float) std::exp (-(double) numSamples / (0.3 * sr));
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            const float blockMs = (float) ((ch == 0 ? sumSqL : sumSqR) / (double) numSamples);
+            const float prev    = inputMeanSquare[(size_t) ch].load (std::memory_order_relaxed);
+            inputMeanSquare[(size_t) ch].store (prev + a * (blockMs - prev), std::memory_order_relaxed);
+        }
     }
 
     if (kneeActive)
@@ -1131,7 +1227,66 @@ void AudioPluginAudioProcessor::setStateInformation (const void* data, int sizeI
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         if (xml->hasTagName (apvts.state.getType()))
+        {
             apvts.replaceState (juce::ValueTree::fromXml (*xml));
+            readCalibrationFromState();
+        }
+}
+
+//==============================================================================
+// Units and calibration
+//==============================================================================
+namespace
+{
+    const juce::Identifier unitProp ("unitDbu");
+    const juce::Identifier calInProps[]  { "calInL",  "calInR" };
+    const juce::Identifier calOutProps[] { "calOutL", "calOutR" };
+}
+
+void AudioPluginAudioProcessor::readCalibrationFromState()
+{
+    const auto& state = apvts.state;
+    unitDbu = (bool) state.getProperty (unitProp, false);
+
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        calIn[(size_t) ch]  = (float) (double) state.getProperty (calInProps[ch],  18.0);
+        calOut[(size_t) ch] = (float) (double) state.getProperty (calOutProps[ch], 18.0);
+    }
+}
+
+void AudioPluginAudioProcessor::setUnitDbu (bool dbu)
+{
+    unitDbu = dbu;
+    apvts.state.setProperty (unitProp, dbu, nullptr);
+}
+
+void AudioPluginAudioProcessor::setInputCalibration (int channel, float dbuAtFullScale)
+{
+    channel = juce::jlimit (0, 1, channel);
+    calIn[(size_t) channel] = dbuAtFullScale;
+    apvts.state.setProperty (calInProps[channel], dbuAtFullScale, nullptr);
+}
+
+void AudioPluginAudioProcessor::setOutputCalibration (int channel, float dbuAtFullScale)
+{
+    channel = juce::jlimit (0, 1, channel);
+    calOut[(size_t) channel] = dbuAtFullScale;
+    apvts.state.setProperty (calOutProps[channel], dbuAtFullScale, nullptr);
+}
+
+float AudioPluginAudioProcessor::getInputLevelDb (int channel) const noexcept
+{
+    const float ms = inputMeanSquare[(size_t) juce::jlimit (0, 1, channel)].load (std::memory_order_relaxed);
+    // RMS of a sine * sqrt(2) = its peak -> mean square * 2
+    return juce::Decibels::gainToDecibels (std::sqrt (2.0f * ms), -120.0f);
+}
+
+void AudioPluginAudioProcessor::setCalibrationTone (bool on, float levelDbL, float levelDbR) noexcept
+{
+    calToneGain[0] = juce::Decibels::decibelsToGain (juce::jmin (0.0f, levelDbL));
+    calToneGain[1] = juce::Decibels::decibelsToGain (juce::jmin (0.0f, levelDbR));
+    calToneOn      = on;
 }
 
 //==============================================================================

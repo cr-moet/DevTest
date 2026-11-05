@@ -1,5 +1,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "CalibrationComponent.h"
+#include "DevTestDialog.h"
 
 using namespace UiHelpers;
 
@@ -141,6 +143,7 @@ KneePage::KneePage (AudioPluginAudioProcessor& p)
 
     waveAttach     = std::make_unique<ComboAttachment>  (p.apvts, ParamIDs::kneeWave,     waveBox);
     outputAttach   = std::make_unique<ComboAttachment>  (p.apvts, ParamIDs::kneeOutput,   outputBox);
+    outputBox.onChange = [this] { knee.repaint(); };   // input axis uses the calibration of this output
     freqAttach     = std::make_unique<SliderAttachment> (p.apvts, ParamIDs::kneeFreq,     freqSlider);
     durationAttach = std::make_unique<SliderAttachment> (p.apvts, ParamIDs::kneeDuration, durationSlider);
 
@@ -258,6 +261,8 @@ SweepPage::SweepPage (AudioPluginAudioProcessor& p)
     gateAttach     = std::make_unique<ComboAttachment>  (p.apvts, ParamIDs::swGate,      gateBox);
     durationAttach = std::make_unique<SliderAttachment> (p.apvts, ParamIDs::swDuration,  durationSlider);
     levelAttach    = std::make_unique<SliderAttachment> (p.apvts, ParamIDs::swLevel,     levelSlider);
+    setupLevelText (levelSlider, p, [&p] { return juce::roundToInt (p.apvts.getRawParameterValue (ParamIDs::swOutput)->load()) == 1 ? 1 : 0; });
+    outputBox.onChange = [this] { levelSlider.updateText(); };
     normAttach     = std::make_unique<ButtonAttachment> (p.apvts, ParamIDs::swNormalize, normButton);
     intervalAttach = std::make_unique<ComboAttachment>  (p.apvts, ParamIDs::swInterval,  intervalBox);
     averagesAttach = std::make_unique<ComboAttachment>  (p.apvts, ParamIDs::swAverages,  averagesBox);
@@ -425,9 +430,11 @@ AttRelPage::AttRelPage (AudioPluginAudioProcessor& p)
     freqAttach   = std::make_unique<SliderAttachment> (p.apvts, ParamIDs::arFreq,    freqSlider);
     len1Attach   = std::make_unique<SliderAttachment> (p.apvts, ParamIDs::arLen1,    len1Slider);
     level1Attach = std::make_unique<SliderAttachment> (p.apvts, ParamIDs::arLevel1,  level1Slider);
+    setupLevelText (level1Slider, p, [&p] { return juce::roundToInt (p.apvts.getRawParameterValue (ParamIDs::arOutput)->load()) == 1 ? 1 : 0; });
     len2Attach   = std::make_unique<SliderAttachment> (p.apvts, ParamIDs::arLen2,    len2Slider);
     level2Attach = std::make_unique<SliderAttachment> (p.apvts, ParamIDs::arPercent, level2Slider);
     outputAttach = std::make_unique<ComboAttachment>  (p.apvts, ParamIDs::arOutput,  outputBox);
+    outputBox.onChange = [this] { level1Slider.updateText(); display.repaint(); };
 
     startTimerHz (10);
 }
@@ -531,9 +538,27 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
     freqAttach   = std::make_unique<SliderAttachment> (s, ParamIDs::genFreq,   freqSlider);
     levelAttach  = std::make_unique<SliderAttachment> (s, ParamIDs::genLevel,  levelSlider);
     genOnAttach  = std::make_unique<ButtonAttachment> (s, ParamIDs::genOn,     genOnButton);
+    setupLevelText (levelSlider, p, [&p] { return juce::roundToInt (p.apvts.getRawParameterValue (ParamIDs::genOutput)->load()) == 2 ? 1 : 0; });
+    genOutBox.onChange = [this] { levelSlider.updateText(); };
 
-    // ---------------- Standalone window buttons (hidden in the plugin) ----------------
-    addChildComponent (optionsButton);
+    // ---------------- Level unit switch ----------------
+    setupLabel (*this, unitLabel, "Unit");
+    unitLabel.setJustificationType (juce::Justification::centredRight);
+    for (auto* b : { &unitFsButton, &unitDbuButton })
+    {
+        b->setClickingTogglesState (true);
+        b->setRadioGroupId (1002);
+        b->getProperties().set ("led", true);
+        b->getProperties().set ("keepCase", true);
+        addAndMakeVisible (b);
+    }
+    (p.isUnitDbu() ? unitDbuButton : unitFsButton).setToggleState (true, juce::dontSendNotification);
+    unitFsButton.onClick  = [this] { if (unitFsButton.getToggleState())  { processorRef.setUnitDbu (false); refreshUnits(); } };
+    unitDbuButton.onClick = [this] { if (unitDbuButton.getToggleState()) { processorRef.setUnitDbu (true);  refreshUnits(); } };
+
+    // ---------------- Options menu; window buttons (standalone only) ----------------
+    optionsButton.onClick = [this] { showOptionsMenu(); };
+    addAndMakeVisible (optionsButton);
     addChildComponent (minimiseButton);
     addChildComponent (closeButton);
 
@@ -550,6 +575,9 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
 
 AudioPluginAudioProcessorEditor::~AudioPluginAudioProcessorEditor()
 {
+    if (calibrationWindow != nullptr)
+        delete calibrationWindow.getComponent();
+
     setLookAndFeel (nullptr);
 }
 
@@ -576,17 +604,48 @@ void AudioPluginAudioProcessorEditor::showPage (int index)
 }
 
 void AudioPluginAudioProcessorEditor::setWindowControls (std::function<void()> onClose, std::function<void()> onMinimise,
-                                                         std::function<void()> onOptions)
+                                                         std::function<void()> onAudioSettings)
 {
     closeButton.onClick    = std::move (onClose);
     minimiseButton.onClick = std::move (onMinimise);
-    optionsButton.onClick  = std::move (onOptions);
+    showAudioSettings      = std::move (onAudioSettings);
 
     hasWindowControls = true;
     closeButton.setVisible (true);
     minimiseButton.setVisible (true);
-    optionsButton.setVisible (true);
     resized();
+}
+
+void AudioPluginAudioProcessorEditor::showOptionsMenu()
+{
+    juce::PopupMenu menu;
+    if (showAudioSettings != nullptr)
+        menu.addItem ("Audio settings...", [this] { showAudioSettings(); });
+    menu.addItem ("Calibration...", [this] { showCalibration(); });
+
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&optionsButton));
+}
+
+void AudioPluginAudioProcessorEditor::showCalibration()
+{
+    if (calibrationWindow != nullptr)
+    {
+        calibrationWindow->toFront (true);
+        return;
+    }
+
+    calibrationWindow = DevTestDialog::show ("Calibration",
+                                             std::make_unique<CalibrationComponent> (processorRef, [this] { refreshUnits(); }),
+                                             this);
+}
+
+void AudioPluginAudioProcessorEditor::refreshUnits()
+{
+    levelSlider.updateText();
+    kneePage.refreshUnits();
+    sweepPage.refreshUnits();
+    attRelPage.refreshUnits();
+    repaint();
 }
 
 bool AudioPluginAudioProcessorEditor::isCaptionArea (juce::Point<int> position) const
@@ -666,15 +725,6 @@ void AudioPluginAudioProcessorEditor::layoutTitle()
     titlePath.clear();
     glyphs.createPath (titlePath);
 
-    // Make the lettering extra bold: add an outline stroke around the letters
-    // (the union of letters and outline is used as the cut-out shape)
-    {
-        juce::Path outline;
-        juce::PathStrokeType (0.6f, juce::PathStrokeType::mitered).createStrokedPath (outline, titlePath);
-        titlePath.addPath (outline);
-        titlePath.setUsingNonZeroWinding (true);
-    }
-
     const auto textBounds = titlePath.getBounds();
 
     const float boxW = std::round (textBounds.getWidth()  + 2.0f * (padding + border));
@@ -725,17 +775,29 @@ void AudioPluginAudioProcessorEditor::resized()
 
     // Window buttons in the top right corner (standalone only)
     {
+        // (in the plugin only the options button, at the right edge)
         auto buttons = getLocalBounds().removeFromTop (16 + 6).withTrimmedTop (6).withTrimmedRight (6);
-        closeButton.setBounds    (buttons.removeFromRight (16));
-        buttons.removeFromRight (4);
-        minimiseButton.setBounds (buttons.removeFromRight (16));
-        buttons.removeFromRight (4);
+        if (hasWindowControls)
+        {
+            closeButton.setBounds    (buttons.removeFromRight (16));
+            buttons.removeFromRight (4);
+            minimiseButton.setBounds (buttons.removeFromRight (16));
+            buttons.removeFromRight (4);
+        }
         optionsButton.setBounds  (buttons.removeFromRight (16));
     }
 
     auto area = getLocalBounds();
     area.removeFromTop (headerHeight);
     area.reduce (12, 10);
+
+    // Unit switch: top right, in the row of the tabs (above the generator on Scope/FFT)
+    {
+        auto unitRow = area.withHeight (30);
+        unitDbuButton.setBounds (unitRow.removeFromRight (64));
+        unitFsButton.setBounds  (unitRow.removeFromRight (64));
+        unitLabel.setBounds     (unitRow.removeFromRight (56));
+    }
 
     // Right column with the generator (Scope and FFT only)
     const bool showGenerator = currentPage <= 1;

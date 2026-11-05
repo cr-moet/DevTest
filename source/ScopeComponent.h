@@ -300,12 +300,19 @@ private:
         const float yb   = plot.getBottom() + 4.0f;
         const float half = plot.getWidth() * 0.5f;
 
+        // dBu: peak = level of a sine with these peaks, RMS = true RMS level
+        // (raw RMS of a full-scale sine is -3.01 dBFS, its dBu level is the calibration value)
+        const auto unit   = " " + processor.getLevelUnit();
+        const bool dbu    = processor.isUnitDbu();
+        const auto peakTx = [&] (float db, int ch) { return db <= -119.0f ? fmt (db) : fmt (db + processor.inputOffsetDb (ch)); };
+        const auto rmsTx  = [&] (float db, int ch) { return db <= -119.0f ? fmt (db) : fmt (db + processor.inputOffsetDb (ch) + (dbu ? 3.0103f : 0.0f)); };
+
         g.setColour (showL ? traceL : traceL.withAlpha (0.3f));
-        g.drawText ("L   Peak " + fmt (levelPeakL) + " dBFS   RMS " + fmt (levelRmsL) + " dBFS",
+        g.drawText ("L   Peak " + peakTx (levelPeakL, 0) + unit + "   RMS " + rmsTx (levelRmsL, 0) + unit,
                     juce::Rectangle<float> (plot.getX(), yb, half, 16.0f), juce::Justification::centredLeft);
 
         g.setColour (showR ? traceR : traceR.withAlpha (0.3f));
-        g.drawText ("R   Peak " + fmt (levelPeakR) + " dBFS   RMS " + fmt (levelRmsR) + " dBFS",
+        g.drawText ("R   Peak " + peakTx (levelPeakR, 1) + unit + "   RMS " + rmsTx (levelRmsR, 1) + unit,
                     juce::Rectangle<float> (plot.getX() + half, yb, half, 16.0f), juce::Justification::centredRight);
 
         g.setColour (triggered ? accent : text.withAlpha (0.4f));

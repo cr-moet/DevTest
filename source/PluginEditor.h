@@ -55,6 +55,24 @@ namespace UiHelpers
         return 26 + rows * 32 + (rows - 1) * 6 + 10;
     }
 
+    // Output level slider shown in the selected unit (dBFS or dBu). The parameter
+    // itself stays in dBFS; outputChannel() returns the output whose calibration is used.
+    // Call after creating the attachment (which sets its own text functions).
+    inline void setupLevelText (juce::Slider& slider, AudioPluginAudioProcessor& p, std::function<int()> outputChannel)
+    {
+        slider.textFromValueFunction = [&p, outputChannel] (double v)
+        {
+            const double level = v + (double) p.outputOffsetDb (outputChannel());
+            return (level > 0.05 ? "+" : "") + juce::String (level, 1) + " " + p.getLevelUnit();
+        };
+        slider.valueFromTextFunction = [&p, outputChannel] (const juce::String& text)
+        {
+            return text.retainCharacters ("-+0123456789.,").replaceCharacter (',', '.').getDoubleValue()
+                     - (double) p.outputOffsetDb (outputChannel());
+        };
+        slider.updateText();
+    }
+
     inline void setupCombo (juce::Component& parent, juce::ComboBox& box,
                             juce::AudioProcessorValueTreeState& apvts, const juce::String& paramID)
     {
@@ -114,6 +132,7 @@ class KneePage final : public juce::Component,
 public:
     explicit KneePage (AudioPluginAudioProcessor& p);
     void resized() override;
+    void refreshUnits()   { knee.repaint(); }
 
 private:
     void timerCallback() override;
@@ -141,6 +160,7 @@ class SweepPage final : public juce::Component,
 public:
     explicit SweepPage (AudioPluginAudioProcessor& p);
     void resized() override;
+    void refreshUnits()   { levelSlider.updateText(); }
 
 private:
     void timerCallback() override;
@@ -180,6 +200,7 @@ class AttRelPage final : public juce::Component,
 public:
     explicit AttRelPage (AudioPluginAudioProcessor& p);
     void resized() override;
+    void refreshUnits()   { level1Slider.updateText(); display.repaint(); }
 
 private:
     void timerCallback() override;
@@ -260,10 +281,11 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
-    // Standalone only: shows the window buttons (close, minimise, options) in the
-    // header and makes the header draggable to move the borderless window
+    // Standalone only: shows the window buttons (close, minimise) in the header,
+    // adds "Audio settings" to the options menu and makes the header draggable
+    // to move the borderless window
     void setWindowControls (std::function<void()> onClose, std::function<void()> onMinimise,
-                            std::function<void()> onOptions);
+                            std::function<void()> onAudioSettings);
 
     // Standalone: true for the part of the header that moves the window
     // (title bar area without the window buttons)
@@ -276,6 +298,9 @@ public:
 private:
     void showPage (int index);
     void layoutTitle();
+    void showOptionsMenu();
+    void showCalibration();
+    void refreshUnits();   // after switching dBFS/dBu or changing the calibration
 
     static constexpr int   headerHeight = 56;
     static constexpr float titleBorder  = 5.0f;   // frame thickness around the program name
@@ -298,6 +323,14 @@ private:
     juce::Label    waveLabel, freqLabel, levelLabel, genOutLabel;
     juce::ComboBox waveBox, genOutBox;
     juce::Slider   freqSlider, levelSlider;
+
+    // Level unit switch (top right, on every tab)
+    juce::Label unitLabel;
+    juce::TextButton unitFsButton { "dBFS" }, unitDbuButton { "dBu" };
+
+    // Options menu (calibration; in the standalone also the audio settings)
+    std::function<void()> showAudioSettings;
+    juce::Component::SafePointer<juce::Component> calibrationWindow;
 
     // Standalone window buttons
     WindowButton optionsButton  { WindowButton::Type::options,  DevTestColours::text };

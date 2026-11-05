@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "ScopeBuffer.h"
+#include <array>
 
 //==============================================================================
 // Parameter IDs in one place, so processor and editor use the same ones
@@ -183,6 +184,33 @@ public:
     // Valid only while no burst test is running
     const BurstRecording& getBurstRecording() const noexcept { return burstRecording; }
 
+    //==========================================================================
+    // Level units and calibration.
+    // A calibration value is the level in dBu of a sine whose peaks reach 0 dBFS
+    // (the usual "0 dBFS = +x dBu" figure of an audio interface). dBu values are
+    // RMS levels (0 dBu = 0.775 V RMS). Set from the GUI thread, saved with the state.
+    void setUnitDbu (bool dbu);
+    bool isUnitDbu() const noexcept                       { return unitDbu.load(); }
+    juce::String getLevelUnit() const                     { return isUnitDbu() ? "dBu" : "dBFS"; }
+
+    void  setInputCalibration (int channel, float dbuAtFullScale);
+    void  setOutputCalibration (int channel, float dbuAtFullScale);
+    float getInputCalibration (int channel) const noexcept  { return calIn[(size_t) juce::jlimit (0, 1, channel)].load(); }
+    float getOutputCalibration (int channel) const noexcept { return calOut[(size_t) juce::jlimit (0, 1, channel)].load(); }
+
+    // Offset to add to a dBFS level (sine peak) for the display: 0 in dBFS mode
+    float inputOffsetDb (int channel) const noexcept   { return isUnitDbu() ? getInputCalibration (channel) : 0.0f; }
+    float outputOffsetDb (int channel) const noexcept  { return isUnitDbu() ? getOutputCalibration (channel) : 0.0f; }
+
+    // Input level for the calibration: peak level of a sine in dBFS
+    // (measured as RMS + 3.01 dB, averaged over about 0.3 s)
+    float getInputLevelDb (int channel) const noexcept;
+
+    // Reference tone for the calibration: 1 kHz sine on both outputs, level per
+    // output in dBFS (replaces all other output signals while it is on)
+    void setCalibrationTone (bool on, float levelDbL, float levelDbR) noexcept;
+    bool isCalibrationToneOn() const noexcept  { return calToneOn.load(); }
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
@@ -226,6 +254,19 @@ private:
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> kneeFade { 0.0f };
     double   kneeSumGen = 0.0, kneeSumRetL = 0.0, kneeSumRetR = 0.0, kneeSumLevelDb = 0.0;
     int      kneeWinCount = 0, kneeWinLength = 960;
+
+    // Loop latency compensation: a click before the sweep measures the latency;
+    // the returned signal is then compared with the tone sent one latency earlier
+    enum class KneeStage { click, sweep, tail };
+    KneeStage kneeStage = KneeStage::click;
+    int64_t  kneeClickPos = 0, kneeClickLength = 1, kneeClickPeakPos = 0, kneeTailLeft = 0;
+    float    kneeClickPeak = 0.0f;
+    int      kneeLatency = 0;
+    static constexpr float kneeClickGain = 0.25f;              // -12 dBFS
+    static constexpr float kneeNoLevel   = -1000.0f;           // ring marker: not part of the sweep
+    std::vector<float> kneeSentRing, kneeLevelRing;            // sent tone and its level (dB)
+    int64_t  kneeRingPos = 0;
+    size_t   kneeRingMask = 0;
 
     // ---------------- Frequency response test ----------------
     std::atomic<float>* swModeParam     = nullptr;
@@ -322,6 +363,18 @@ private:
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear>         smoothedGain { 0.0f };
 
     std::atomic<double> currentSampleRate { 48000.0 };
+
+    // Units and calibration
+    void readCalibrationFromState();
+    std::atomic<bool> unitDbu { false };
+    std::array<std::atomic<float>, 2> calIn  { { 18.0f, 18.0f } };   // dBu at 0 dBFS
+    std::array<std::atomic<float>, 2> calOut { { 18.0f, 18.0f } };
+
+    // Input meter (mean square, smoothed per block) and reference tone
+    std::array<std::atomic<float>, 2> inputMeanSquare { { 0.0f, 0.0f } };
+    std::atomic<bool>  calToneOn { false };
+    std::array<std::atomic<float>, 2> calToneGain { { 0.25f, 0.25f } };
+    double calTonePhase = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioPluginAudioProcessor)
 };

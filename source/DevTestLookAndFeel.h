@@ -7,7 +7,7 @@
 //==============================================================================
 namespace DevTestColours
 {
-    inline const juce::Colour background { 0xfff2ebd6 };   // background
+    inline const juce::Colour background { 0xffeae7de };   // background
     inline const juce::Colour text       { 0xff292929 };   // text
     inline const juce::Colour accent     { 0xffd52925 };   // special elements
     inline const juce::Colour traceL     { 0xffd52925 };   // channel L (all displays)
@@ -237,7 +237,9 @@ public:
         g.setColour (button.findColour (button.getToggleState() ? juce::TextButton::textColourOnId
                                                                 : juce::TextButton::textColourOffId)
                            .withMultipliedAlpha (button.isEnabled() ? 1.0f : 0.5f));
-        g.drawText (button.getButtonText().toUpperCase(), face, juce::Justification::centred);
+        // Units like "dBFS" / "dBu" keep their spelling (property "keepCase")
+        const auto label = button.getProperties()["keepCase"] ? button.getButtonText() : button.getButtonText().toUpperCase();
+        g.drawText (label, face, juce::Justification::centred);
     }
 
     // Toggle button: small square push button with LED, label to the right

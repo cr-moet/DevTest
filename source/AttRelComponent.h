@@ -620,8 +620,12 @@ private:
             if (w >= 100.0f)                                          // only where there is room for it
                 g.drawText (textToShow, juce::Rectangle<float> (x + 4.0f, plot.getY() + 2.0f, w, 14.0f), juce::Justification::centredLeft);
         };
-        burstLabel (result.burst1Start, result.burst2Start, "Burst 1  " + juce::String (result.amp1Db, 1) + " dBFS");
-        burstLabel (result.burst2Start, result.burst2End,   "Burst 2  " + juce::String (result.amp2Db, 1) + " dBFS");
+        // Sent levels: in dBu with the calibration of the selected output (L for "L + R")
+        const int outCh = juce::roundToInt (processor.apvts.getRawParameterValue (ParamIDs::arOutput)->load()) == 1 ? 1 : 0;
+        const float outOffset = processor.outputOffsetDb (outCh);
+        const auto unit = " " + processor.getLevelUnit();
+        burstLabel (result.burst1Start, result.burst2Start, "Burst 1  " + juce::String (result.amp1Db + outOffset, 1) + unit);
+        burstLabel (result.burst2Start, result.burst2End,   "Burst 2  " + juce::String (result.amp2Db + outOffset, 1) + unit);
 
         // Level grid (dB)
         const float step = (hi - lo) > 24.0f ? 6.0f : 3.0f;

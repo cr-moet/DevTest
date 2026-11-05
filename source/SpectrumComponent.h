@@ -41,8 +41,8 @@ public:
             juce::Graphics::ScopedSaveState save (g);
             g.reduceClipRegion (plot.toNearestInt());
 
-            if (showR) drawSpectrum (g, plot, dbR, traceR);
-            if (showL) drawSpectrum (g, plot, dbL, traceL);
+            if (showR) drawSpectrum (g, plot, dbR, traceR, processor.inputOffsetDb (1));
+            if (showL) drawSpectrum (g, plot, dbL, traceL, processor.inputOffsetDb (0));
         }
 
         g.setColour (text.withAlpha (0.6f));
@@ -80,10 +80,26 @@ private:
         return minFreq * std::pow (getMaxFreq() / minFreq, (x - plot.getX()) / plot.getWidth());
     }
 
+    // Level step of the grid lines
+    float getGridStepDb() const  { return getRangeDb() > 90.0f ? 20.0f : 10.0f; }
+
+    // Top of the level axis: 0 dBFS, or in dBu the next grid line above the
+    // calibrated full-scale level
+    float getTopDb() const
+    {
+        if (! processor.isUnitDbu())
+            return 0.0f;
+
+        const float step = getGridStepDb();
+        const float fullScale = juce::jmax (processor.inputOffsetDb (0), processor.inputOffsetDb (1));
+        return std::ceil (fullScale / step - 0.001f) * step;
+    }
+
+    // Level in display units (dBFS or dBu) -> y
     float dbToY (float db, juce::Rectangle<float> plot) const
     {
         const float range = getRangeDb();
-        return plot.getY() + plot.getHeight() * juce::jlimit (0.0f, 1.0f, -db / range);
+        return plot.getY() + plot.getHeight() * juce::jlimit (0.0f, 1.0f, (getTopDb() - db) / range);
     }
 
     //==========================================================================
@@ -226,23 +242,25 @@ private:
 
         // Level lines
         const float range = getRangeDb();
-        const float step  = range > 90.0f ? 20.0f : 10.0f;
+        const float step  = getGridStepDb();
+        const float top   = getTopDb();
 
         for (int i = 0; (float) i * step <= range; ++i)
         {
-            const float db = -(float) i * step;
+            const float db = top - (float) i * step;
             const float y  = dbToY (db, plot);
             g.setColour (i == 0 ? gridStrong : grid);
             g.drawLine (plot.getX(), y, plot.getRight(), y, 1.0f);
 
             g.setColour (text.withAlpha (0.7f));
-            g.drawText (juce::String ((int) db), juce::Rectangle<float> (0.0f, y - 7.0f, plot.getX() - 4.0f, 14.0f),
+            g.drawText ((db > 0.0f ? "+" : "") + juce::String ((int) db), juce::Rectangle<float> (0.0f, y - 7.0f, plot.getX() - 4.0f, 14.0f),
                         juce::Justification::centredRight);
         }
     }
 
+    // offset: dBFS -> display units (0 in dBFS mode, calibration value in dBu mode)
     void drawSpectrum (juce::Graphics& g, juce::Rectangle<float> plot,
-                       const std::vector<float>& db, juce::Colour colour) const
+                       const std::vector<float>& db, juce::Colour colour, float offset) const
     {
         if (db.size() < 4)
             return;
@@ -278,7 +296,7 @@ private:
                 value = db[(size_t) i] + frac * (db[(size_t) i + 1] - db[(size_t) i]);
             }
 
-            const float y = dbToY (value, plot);
+            const float y = dbToY (value + offset, plot);
             if (px == 0) path.startNewSubPath (x, y);
             else         path.lineTo (x, y);
         }
@@ -299,24 +317,25 @@ private:
     {
         using namespace DevTestColours;
 
-        const auto fmtPeak = [] (float f, float level)
+        const auto unit = processor.getLevelUnit();
+        const auto fmtPeak = [&] (float f, float level, int ch)
         {
             if (level < -150.0f)
                 return juce::String ("--");
             return (f < 1000.0f ? juce::String (f, 1) + " Hz" : juce::String (f / 1000.0f, 3) + " kHz")
-                       + "   " + juce::String (level, 1) + " dBFS";
+                       + "   " + juce::String (level + processor.inputOffsetDb (ch), 1) + " " + unit;
         };
 
         const float y = plot.getY() - 20.0f;
 
         g.setFont (juce::Font (juce::FontOptions (12.0f)));
         g.setColour (showL ? traceL : traceL.withAlpha (0.3f));
-        g.drawText ("L  Peak " + fmtPeak (peakFreqL, peakLevelL),
+        g.drawText ("L  Peak " + fmtPeak (peakFreqL, peakLevelL, 0),
                     juce::Rectangle<float> (plot.getX(), y, plot.getWidth() * 0.5f, 16.0f),
                     juce::Justification::centredLeft);
 
         g.setColour (showR ? traceR : traceR.withAlpha (0.3f));
-        g.drawText ("R  Peak " + fmtPeak (peakFreqR, peakLevelR),
+        g.drawText ("R  Peak " + fmtPeak (peakFreqR, peakLevelR, 1),
                     juce::Rectangle<float> (plot.getCentreX(), y, plot.getWidth() * 0.5f, 16.0f),
                     juce::Justification::centredRight);
 
