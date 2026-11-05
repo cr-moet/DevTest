@@ -342,15 +342,122 @@ void SweepPage::resized()
 }
 
 //==============================================================================
+// AttRelPage
+//==============================================================================
+AttRelPage::AttRelPage (AudioPluginAudioProcessor& p)
+    : processor (p), display (p)
+{
+    addAndMakeVisible (display);
+
+    startButton.setColour (juce::TextButton::buttonColourId,  DevTestColours::accent);
+    startButton.setColour (juce::TextButton::textColourOffId, DevTestColours::background);
+    startButton.onClick = [this]
+    {
+        if (processor.isBurstRunning())
+        {
+            processor.stopBurstTest();
+        }
+        else
+        {
+            // Switch the normal generator off, so it does not come back after the test
+            if (auto* genOn = processor.apvts.getParameter (ParamIDs::genOn))
+                genOn->setValueNotifyingHost (0.0f);
+
+            display.clear();
+            processor.startBurstTest();
+        }
+        timerCallback();
+    };
+    addAndMakeVisible (startButton);
+
+    setupLabel (*this, freqLabel,   "Frequency");
+    setupLabel (*this, outputLabel, "Output");
+    setupLabel (*this, burst1Label, "Burst 1");
+    setupLabel (*this, burst2Label, "Burst 2");
+    setupLabel (*this, len1Label,   "Length");
+    setupLabel (*this, level1Label, "Level");
+    setupLabel (*this, len2Label,   "Length");
+    setupLabel (*this, level2Label, "Level");
+
+    for (auto* l : { &burst1Label, &burst2Label })
+    {
+        l->setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
+        l->setColour (juce::Label::textColourId, DevTestColours::accent);
+    }
+
+    for (auto* s : { &freqSlider, &len1Slider, &level1Slider, &len2Slider, &level2Slider })
+        setupSlider (*this, *s);
+    level2Slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 130, 24);   // "25 % (-12.0 dB)"
+
+    setupCombo (*this, outputBox, p.apvts, ParamIDs::arOutput);
+
+    freqAttach   = std::make_unique<SliderAttachment> (p.apvts, ParamIDs::arFreq,    freqSlider);
+    len1Attach   = std::make_unique<SliderAttachment> (p.apvts, ParamIDs::arLen1,    len1Slider);
+    level1Attach = std::make_unique<SliderAttachment> (p.apvts, ParamIDs::arLevel1,  level1Slider);
+    len2Attach   = std::make_unique<SliderAttachment> (p.apvts, ParamIDs::arLen2,    len2Slider);
+    level2Attach = std::make_unique<SliderAttachment> (p.apvts, ParamIDs::arPercent, level2Slider);
+    outputAttach = std::make_unique<ComboAttachment>  (p.apvts, ParamIDs::arOutput,  outputBox);
+
+    startTimerHz (10);
+}
+
+void AttRelPage::timerCallback()
+{
+    const bool running = processor.isBurstRunning();
+    startButton.setButtonText (running ? "Stop" : "Start test");
+
+    for (juce::Component* c : { (juce::Component*) &freqSlider, (juce::Component*) &len1Slider, (juce::Component*) &level1Slider,
+                                (juce::Component*) &len2Slider, (juce::Component*) &level2Slider, (juce::Component*) &outputBox })
+        c->setEnabled (! running);
+}
+
+void AttRelPage::resized()
+{
+    auto area = getLocalBounds();
+    auto row3 = area.removeFromBottom (32);
+    area.removeFromBottom (6);
+    auto row2 = area.removeFromBottom (32);
+    area.removeFromBottom (6);
+    auto row1 = area.removeFromBottom (32);
+    area.removeFromBottom (8);
+    display.setBounds (area);
+
+    // Row 1: start, frequency, output
+    startButton.setBounds (row1.removeFromLeft (110));
+    row1.removeFromLeft (14);
+    outputBox.setBounds (row1.removeFromRight (100));
+    outputLabel.setBounds (row1.removeFromRight (56));
+    row1.removeFromRight (12);
+    freqLabel.setBounds (row1.removeFromLeft (76));
+    freqSlider.setBounds (row1);
+
+    // Rows 2 and 3: length and level of each burst
+    const auto burstRow = [] (juce::Rectangle<int> row, juce::Label& title, juce::Label& lenLabel, juce::Slider& len,
+                              juce::Label& levelLabel, juce::Slider& level)
+    {
+        title.setBounds (row.removeFromLeft (70));
+        const int half = row.getWidth() / 2;
+        auto left = row.removeFromLeft (half).withTrimmedRight (10);
+        lenLabel.setBounds (left.removeFromLeft (52));
+        len.setBounds (left);
+        levelLabel.setBounds (row.removeFromLeft (46));
+        level.setBounds (row);
+    };
+
+    burstRow (row2, burst1Label, len1Label, len1Slider, level1Label, level1Slider);
+    burstRow (row3, burst2Label, len2Label, len2Slider, level2Label, level2Slider);
+}
+
+//==============================================================================
 // Editor
 //==============================================================================
 AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAudioProcessor& p)
-    : AudioProcessorEditor (&p), processorRef (p), scopePage (p), fftPage (p), kneePage (p), sweepPage (p)
+    : AudioProcessorEditor (&p), processorRef (p), scopePage (p), fftPage (p), kneePage (p), sweepPage (p), attRelPage (p)
 {
     setLookAndFeel (&lookAndFeel);
 
     // ---------------- Tabs ----------------
-    for (auto* tab : { &scopeTab, &fftTab, &kneeTab, &sweepTab })
+    for (auto* tab : { &scopeTab, &fftTab, &kneeTab, &sweepTab, &attRelTab })
     {
         tab->setClickingTogglesState (true);
         tab->setRadioGroupId (1001);
@@ -365,11 +472,13 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
     fftTab.onClick   = [this] { if (fftTab.getToggleState())   showPage (1); };
     kneeTab.onClick  = [this] { if (kneeTab.getToggleState())  showPage (2); };
     sweepTab.onClick = [this] { if (sweepTab.getToggleState()) showPage (3); };
+    attRelTab.onClick = [this] { if (attRelTab.getToggleState()) showPage (4); };
 
     addChildComponent (scopePage);
     addChildComponent (fftPage);
     addChildComponent (kneePage);
     addChildComponent (sweepPage);
+    addChildComponent (attRelPage);
 
     // ---------------- Channels ----------------
     auto& s = processorRef.apvts;
@@ -415,8 +524,8 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
     genOnAttach  = std::make_unique<ButtonAttachment> (s, ParamIDs::genOn,        genOnButton);
 
     // Restore the last selected tab (saved with the project)
-    const int lastPage = juce::jlimit (0, 3, (int) processorRef.apvts.state.getProperty ("page", 0));
-    juce::TextButton* tabs[] = { &scopeTab, &fftTab, &kneeTab, &sweepTab };
+    const int lastPage = juce::jlimit (0, 4, (int) processorRef.apvts.state.getProperty ("page", 0));
+    juce::TextButton* tabs[] = { &scopeTab, &fftTab, &kneeTab, &sweepTab, &attRelTab };
     tabs[lastPage]->setToggleState (true, juce::dontSendNotification);
     showPage (lastPage);
 
@@ -436,6 +545,7 @@ void AudioPluginAudioProcessorEditor::showPage (int index)
     fftPage.setVisible   (index == 1);
     kneePage.setVisible  (index == 2);
     sweepPage.setVisible (index == 3);
+    attRelPage.setVisible (index == 4);
     processorRef.apvts.state.setProperty ("page", index, nullptr);
 }
 
@@ -488,7 +598,7 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
 
     // Line below the tabs
     g.setColour (accent);
-    g.fillRect (scopeTab.getX(), scopeTab.getBottom(), sweepTab.getRight() - scopeTab.getX(), 2);
+    g.fillRect (scopeTab.getX(), scopeTab.getBottom(), attRelTab.getRight() - scopeTab.getX(), 2);
 }
 
 void AudioPluginAudioProcessorEditor::resized()
@@ -509,12 +619,14 @@ void AudioPluginAudioProcessorEditor::resized()
     fftTab.setBounds   (tabRow.removeFromLeft (90));
     kneeTab.setBounds  (tabRow.removeFromLeft (90));
     sweepTab.setBounds (tabRow.removeFromLeft (90));
+    attRelTab.setBounds (tabRow.removeFromLeft (90));
     area.removeFromTop (8);
 
     scopePage.setBounds (area);
     fftPage.setBounds   (area);
     kneePage.setBounds  (area);
     sweepPage.setBounds (area);
+    attRelPage.setBounds (area);
 
     constexpr int rowH = 30, gap = 6, labelW = 92;
 

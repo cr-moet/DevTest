@@ -5,6 +5,7 @@
 #include "SpectrumComponent.h"
 #include "KneeComponent.h"
 #include "SweepComponent.h"
+#include "AttRelComponent.h"
 #include "DevTestLookAndFeel.h"
 
 using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
@@ -145,6 +146,32 @@ private:
 };
 
 //==============================================================================
+// "Att/Rel" tab: attack and release time of a compressor, measured with two
+// consecutive sine bursts.
+//==============================================================================
+class AttRelPage final : public juce::Component,
+                         private juce::Timer
+{
+public:
+    explicit AttRelPage (AudioPluginAudioProcessor& p);
+    void resized() override;
+
+private:
+    void timerCallback() override;
+
+    AudioPluginAudioProcessor& processor;
+    AttRelComponent display;
+
+    juce::TextButton startButton { "Start test" };
+    juce::Label  freqLabel, outputLabel, burst1Label, burst2Label, len1Label, level1Label, len2Label, level2Label;
+    juce::Slider freqSlider, len1Slider, level1Slider, len2Slider, level2Slider;
+    juce::ComboBox outputBox;
+
+    std::unique_ptr<SliderAttachment> freqAttach, len1Attach, level1Attach, len2Attach, level2Attach;
+    std::unique_ptr<ComboAttachment>  outputAttach;
+};
+
+//==============================================================================
 class AudioPluginAudioProcessorEditor final : public juce::AudioProcessorEditor
 {
 public:
@@ -165,11 +192,12 @@ private:
     DevTestLookAndFeel lookAndFeel;
 
     // Tabs
-    juce::TextButton scopeTab { "Scope" }, fftTab { "FFT" }, kneeTab { "Knee" }, sweepTab { "Sweep" };
+    juce::TextButton scopeTab { "Scope" }, fftTab { "FFT" }, kneeTab { "Knee" }, sweepTab { "Sweep" }, attRelTab { "Att/Rel" };
     ScopePage scopePage;
     FftPage   fftPage;
     KneePage  kneePage;
     SweepPage sweepPage;
+    AttRelPage attRelPage;
 
     // Channels (shared by Scope and FFT)
     juce::GroupComponent channelGroup { {}, "CHANNELS" };

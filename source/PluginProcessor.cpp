@@ -31,6 +31,13 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
     swIntervalParam   = apvts.getRawParameterValue (ParamIDs::swInterval);
     swAveragesParam   = apvts.getRawParameterValue (ParamIDs::swAverages);
     swContinuousParam = apvts.getRawParameterValue (ParamIDs::swContinuous);
+
+    arFreqParam       = apvts.getRawParameterValue (ParamIDs::arFreq);
+    arLen1Param       = apvts.getRawParameterValue (ParamIDs::arLen1);
+    arLevel1Param     = apvts.getRawParameterValue (ParamIDs::arLevel1);
+    arLen2Param       = apvts.getRawParameterValue (ParamIDs::arLen2);
+    arPercentParam    = apvts.getRawParameterValue (ParamIDs::arPercent);
+    arOutputParam     = apvts.getRawParameterValue (ParamIDs::arOutput);
 }
 
 //==============================================================================
@@ -282,6 +289,85 @@ juce::AudioProcessorValueTreeState::ParameterLayout AudioPluginAudioProcessor::c
                                                         "Sweep Display Range", StringArray { "+/- 3 dB", "+/- 12 dB", "+/- 24 dB", "+/- 48 dB" }, 2));
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::swNormalize, 1 },
                                                       "Normalize to 1 kHz", true));
+
+    // ---------------- Attack/release test ----------------
+    {
+        NormalisableRange<float> range (20.0f, 20000.0f);
+        range.setSkewForCentre (1000.0f);
+
+        auto attributes = AudioParameterFloatAttributes()
+            .withLabel ("Hz")
+            .withStringFromValueFunction ([] (float hz, int)
+            {
+                if (hz < 1000.0f) return String (hz, 1) + " Hz";
+                return String (hz / 1000.0f, 3) + " kHz";
+            })
+            .withValueFromStringFunction ([] (const String& text)
+            {
+                auto value = text.retainCharacters ("0123456789.,").replaceCharacter (',', '.').getFloatValue();
+                if (text.containsIgnoreCase ("k"))
+                    value *= 1000.0f;
+                return value;
+            });
+
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::arFreq, 1 },
+                                                           "A/R Frequency", range, 1000.0f, attributes));
+    }
+    {
+        NormalisableRange<float> range (10.0f, 5000.0f, 1.0f);
+        range.setSkewForCentre (300.0f);
+
+        auto attributes = AudioParameterFloatAttributes()
+            .withLabel ("ms")
+            .withStringFromValueFunction ([] (float ms, int) { return String ((int) ms) + " ms"; })
+            .withValueFromStringFunction ([] (const String& text)
+            {
+                auto value = text.retainCharacters ("0123456789.,").replaceCharacter (',', '.').getFloatValue();
+                if (text.containsIgnoreCase ("s") && ! text.containsIgnoreCase ("ms"))
+                    value *= 1000.0f;
+                return value;
+            });
+
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::arLen1, 1 },
+                                                           "Burst 1 Length", range, 500.0f, attributes));
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::arLen2, 1 },
+                                                           "Burst 2 Length", range, 1000.0f, attributes));
+    }
+    {
+        auto attributes = AudioParameterFloatAttributes()
+            .withLabel ("dB")
+            .withStringFromValueFunction ([] (float db, int) { return String (db, 1) + " dBFS"; })
+            .withValueFromStringFunction ([] (const String& text)
+            {
+                return text.retainCharacters ("-0123456789.,").replaceCharacter (',', '.').getFloatValue();
+            });
+
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::arLevel1, 1 },
+                                                           "Burst 1 Level", NormalisableRange<float> (-60.0f, 0.0f, 0.1f),
+                                                           -6.0f, attributes));
+    }
+    {
+        // Amplitude of burst 2 in percent of burst 1 (25 % = -12 dB), max. 100 %
+        NormalisableRange<float> range (1.0f, 100.0f, 1.0f);
+        range.setSkewForCentre (30.0f);
+
+        auto attributes = AudioParameterFloatAttributes()
+            .withLabel ("%")
+            .withStringFromValueFunction ([] (float pct, int)
+            {
+                return String ((int) pct) + " % (" + String (20.0f * std::log10 (pct / 100.0f), 1) + " dB)";
+            })
+            .withValueFromStringFunction ([] (const String& text)
+            {
+                return text.upToFirstOccurrenceOf ("%", false, false)
+                           .retainCharacters ("0123456789.,").replaceCharacter (',', '.').getFloatValue();
+            });
+
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::arPercent, 1 },
+                                                           "Burst 2 Level", range, 25.0f, attributes));
+    }
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::arOutput, 1 },
+                                                        "A/R Output", StringArray { "L", "R", "L + R" }, 2));
     return layout;
 }
 
@@ -319,6 +405,10 @@ void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int)
     swFade.setCurrentAndTargetValue (0.0f);
     swActive = false;
     sweepBusy = false;
+
+    // ... and a running attack/release test
+    arActive = false;
+    burstBusy = false;
 }
 
 //==============================================================================
@@ -327,6 +417,7 @@ void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int)
 void AudioPluginAudioProcessor::startKneeTest() noexcept
 {
     stopSweepTest();            // only one test tone at a time
+    stopBurstTest();
     ++kneeRunIdShared;          // new run id -> the GUI ignores points from older runs
     kneeStopRequest  = false;
     kneeStartRequest = true;
@@ -444,8 +535,9 @@ bool AudioPluginAudioProcessor::startSweepTest()
     impSampleRate = sr;
     sweepSetup    = setup;
 
-    // Switch off a running knee test: only one test signal at a time
+    // Switch off a running knee or attack/release test: only one test signal at a time
     stopKneeTest();
+    stopBurstTest();
 
     ++sweepRunIdShared;
     sweepProgress    = 0.0f;
@@ -464,6 +556,57 @@ double AudioPluginAudioProcessor::octavesPerSecond (double f, double sr) const n
         case SweepLaw::inverse:      break;
     }
     return juce::jmin (f, sw.crossover) / sw.cyclesPerOctave;
+}
+
+//==============================================================================
+// Attack/release test: GUI side
+//==============================================================================
+bool AudioPluginAudioProcessor::startBurstTest()
+{
+    if (burstBusy.load())
+        return false;   // previous run still finishing on the audio thread
+
+    const double sr = currentSampleRate.load();
+    auto& rec = burstRecording;
+
+    rec.sampleRate = sr;
+    rec.freq       = juce::jmin (arFreqParam->load(), (float) (sr * 0.45));
+    rec.amp1       = juce::Decibels::decibelsToGain (arLevel1Param->load());
+    rec.amp2       = rec.amp1 * arPercentParam->load() / 100.0f;
+    rec.latency    = 0;
+
+    // Timeline: click (latency), silence, burst 1, burst 2, fade-out, tail
+    burstClickLength = (int64_t) (0.2 * sr);
+    burstFadeLength  = (int64_t) (0.002 * sr);
+    rec.burst1Start  = burstClickLength + (int64_t) (0.3 * sr);
+    rec.burst2Start  = rec.burst1Start + (int64_t) (arLen1Param->load() * 0.001 * sr);
+    rec.burst2End    = rec.burst2Start + (int64_t) (arLen2Param->load() * 0.001 * sr);
+
+    const auto total = (size_t) (rec.burst2End + burstFadeLength + (int64_t) (0.25 * sr));
+
+    // Allocate here (GUI thread), never on the audio thread
+    rec.sent.assign (total, 0.0f);
+    rec.returnL.assign (total, 0.0f);
+    rec.returnR.assign (total, 0.0f);
+    rec.length = 0;
+
+    // Only one test signal at a time
+    stopKneeTest();
+    stopSweepTest();
+
+    ++burstRunIdShared;
+    burstProgress    = 0.0f;
+    burstStopRequest = false;
+    burstRequested   = true;
+    return true;
+}
+
+void AudioPluginAudioProcessor::stopBurstTest() noexcept
+{
+    if (burstRequested.exchange (false))
+        return;   // not started yet
+
+    burstStopRequest = true;
 }
 
 bool AudioPluginAudioProcessor::readImpulsePeriod (uint64_t index, std::vector<float>& left, std::vector<float>& right) const
@@ -540,6 +683,23 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
         kneeFade.setTargetValue (0.0f);   // short fade-out, no click
     }
 
+    // ---------------- Attack/release test requests ----------------
+    if (burstRequested.exchange (false))
+    {
+        arActive    = true;
+        burstBusy   = true;
+        arPos       = 0;
+        arPhase     = 0.0;
+        arClickPeak = 0.0f;
+    }
+
+    if (burstStopRequest.exchange (false) && arActive)
+    {
+        arActive  = false;
+        burstRecording.length = 0;   // incomplete: not evaluated
+        burstBusy = false;
+    }
+
     // ---------------- Frequency response test requests ----------------
     if (sweepRequested.exchange (false))
     {
@@ -594,7 +754,11 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
 
     // While a knee or sweep test runs the input is never passed through: in a hardware
     // loop (output -> device -> input) that would cause feedback
-    const bool passThru   = passThroughParam->load() > 0.5f && ! kneeActive && ! swActive;
+    const bool passThru   = passThroughParam->load() > 0.5f && ! kneeActive && ! swActive && ! arActive;
+
+    const auto arOut      = (KneeOutput) juce::roundToInt (arOutputParam->load());
+    const bool arToR      = arOut != KneeOutput::left;
+    const bool arToL      = arOut != KneeOutput::right || numOut == 1;
 
     const auto swOut      = (KneeOutput) juce::roundToInt (swOutputParam->load());
     const bool swToR      = swOut != KneeOutput::left;
@@ -604,7 +768,8 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
     smoothedFreq.setTargetValue (genFreqParam->load());
     // The normal generator fades out while a knee test runs, so the test always
     // starts cleanly at the bottom of the sweep
-    smoothedGain.setTargetValue (genOn && ! kneeActive && ! swActive ? juce::Decibels::decibelsToGain (genLevelParam->load()) : 0.0f);
+    smoothedGain.setTargetValue (genOn && ! kneeActive && ! swActive && ! arActive
+                                     ? juce::Decibels::decibelsToGain (genLevelParam->load()) : 0.0f);
 
     // Output routing: generator or knee test tone
     const auto routeL = [] (bool toL, bool toR, int outs) { return toL || (outs == 1 && toR); };
@@ -872,8 +1037,54 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
             }
         }
 
+        // ---------------- Attack/release bursts ----------------
+        float burstTone = 0.0f;
+
+        if (arActive)
+        {
+            auto& rec = burstRecording;
+
+            if (arPos < burstClickLength)
+            {
+                // Click for the latency measurement: the strongest returned sample
+                // after the click gives the loop latency
+                burstTone = arPos == 0 ? rec.amp1 : 0.0f;
+
+                const float v = std::abs (l) + std::abs (r);
+                if (v > arClickPeak && v > 1.0e-4f * rec.amp1)
+                {
+                    arClickPeak = v;
+                    rec.latency = (int) arPos;
+                }
+            }
+            else if (arPos >= rec.burst1Start && arPos < rec.burst2End + burstFadeLength)
+            {
+                // Burst 1, then burst 2 directly afterwards (continuous phase),
+                // a 2 ms fade-out after the end of burst 2
+                float amp = arPos < rec.burst2Start ? rec.amp1 : rec.amp2;
+                if (arPos >= rec.burst2End)
+                    amp *= 1.0f - (float) (arPos - rec.burst2End) / (float) burstFadeLength;
+
+                burstTone = amp * (float) std::sin (juce::MathConstants<double>::twoPi * arPhase);
+                arPhase += (double) rec.freq / sr;
+                if (arPhase >= 1.0)
+                    arPhase -= 1.0;
+            }
+
+            rec.sent[(size_t) arPos]    = burstTone;
+            rec.returnL[(size_t) arPos] = l;
+            rec.returnR[(size_t) arPos] = r;
+
+            if (++arPos >= (int64_t) rec.sent.size())
+            {
+                arActive   = false;
+                rec.length = arPos;
+                burstBusy  = false;    // GUI may now evaluate the recording
+            }
+        }
+
         // The scope/FFT source "Generator" shows the test tone while a test runs
-        const float genForScope = swActive ? sweepTone : (kneeOn ? kneeTone : gen);
+        const float genForScope = arActive ? burstTone : (swActive ? sweepTone : (kneeOn ? kneeTone : gen));
         scopeBuffer.push (pick (srcL, l, r, genForScope), pick (srcR, l, r, genForScope));
 
         float oL = passThru ? l : 0.0f;
@@ -889,6 +1100,9 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
         if (swToL) oL += sweepTone;
         if (swToR) oR += sweepTone;
 
+        if (arToL) oL += burstTone;
+        if (arToR) oR += burstTone;
+
         if (genToL) oL += gen;
         if (genToR) oR += gen;
 
@@ -900,6 +1114,9 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
         kneeProgress = (float) ((double) kneePos / (double) kneeLength);
     else if (! kneeRunning.load())
         kneeProgress = 0.0f;
+
+    if (arActive)
+        burstProgress = (float) ((double) arPos / (double) juce::jmax ((size_t) 1, burstRecording.sent.size()));
 
     if (swActive)
         sweepProgress = sw.mode == SweepMode::impulse

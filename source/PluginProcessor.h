@@ -40,6 +40,12 @@ namespace ParamIDs
     inline constexpr const char* swInterval   = "swInterval";
     inline constexpr const char* swAverages   = "swAverages";
     inline constexpr const char* swContinuous = "swContinuous";
+    inline constexpr const char* arFreq       = "arFreq";
+    inline constexpr const char* arLen1       = "arLen1";
+    inline constexpr const char* arLevel1     = "arLevel1";
+    inline constexpr const char* arLen2       = "arLen2";
+    inline constexpr const char* arPercent    = "arPercent";
+    inline constexpr const char* arOutput     = "arOutput";
 }
 
 // Order must match the choice parameters
@@ -73,6 +79,18 @@ struct SweepPoint
     float gainL = 0.0f;   // dB
     float gainR = 0.0f;   // dB
     uint32_t runId = 0;
+};
+
+// Attack/release test: recording of two consecutive sine bursts (owned by the processor)
+struct BurstRecording
+{
+    std::vector<float> sent, returnL, returnR;
+    int64_t length = 0;                       // valid samples (0 = no complete recording)
+    double  sampleRate = 48000.0;
+    float   freq = 1000.0f;
+    float   amp1 = 0.5f, amp2 = 0.125f;       // linear amplitudes of burst 1 and burst 2
+    int64_t burst1Start = 0, burst2Start = 0, burst2End = 0;
+    int     latency = 0;                      // loop latency in samples (from the click)
 };
 
 // Fixed sweep range of the knee test
@@ -153,6 +171,17 @@ public:
 
     // End frequency of the sweep: selected value, limited to just below Nyquist
     float getSweepEndFrequency() const noexcept;
+
+    //==========================================================================
+    // Attack/release test. Called from the GUI thread.
+    bool startBurstTest();
+    void stopBurstTest() noexcept;
+    bool isBurstRunning() const noexcept     { return burstRequested.load() || burstBusy.load(); }
+    float getBurstProgress() const noexcept  { return burstProgress.load(); }
+    uint32_t getBurstRunId() const noexcept  { return burstRunIdShared.load(); }
+
+    // Valid only while no burst test is running
+    const BurstRecording& getBurstRecording() const noexcept { return burstRecording; }
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -265,6 +294,27 @@ private:
     int      swLatency = 0;
 
     double octavesPerSecond (double f, double sr) const noexcept;
+
+    // ---------------- Attack/release test ----------------
+    std::atomic<float>* arFreqParam    = nullptr;
+    std::atomic<float>* arLen1Param    = nullptr;
+    std::atomic<float>* arLevel1Param  = nullptr;
+    std::atomic<float>* arLen2Param    = nullptr;
+    std::atomic<float>* arPercentParam = nullptr;
+    std::atomic<float>* arOutputParam  = nullptr;
+
+    std::atomic<bool>     burstRequested { false }, burstStopRequest { false }, burstBusy { false };
+    std::atomic<float>    burstProgress { 0.0f };
+    std::atomic<uint32_t> burstRunIdShared { 0 };
+
+    BurstRecording burstRecording;
+    int64_t burstClickLength = 0, burstFadeLength = 0;
+
+    // Audio thread state
+    bool    arActive = false;
+    int64_t arPos = 0;
+    double  arPhase = 0.0;
+    float   arClickPeak = 0.0f;
 
     // Signal generator (phase 0..1)
     double phase = 0.0;
