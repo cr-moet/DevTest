@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <juce_dsp/juce_dsp.h>
 #include "PluginProcessor.h"
 #include "DevTestLookAndFeel.h"
 
@@ -8,10 +9,13 @@
 // Attack/release display.
 //
 // The test sends two sine bursts directly after each other. After the run, the
-// amplitude envelopes of the sent and the returned signal are obtained by
-// synchronous (I/Q) demodulation at the test frequency, averaged over whole
-// periods. Their ratio is the gain of the device over time (in dB), corrected
-// for the loop latency measured with a click before the bursts.
+// amplitude envelopes of the sent and the returned signal are calculated with
+// the Hilbert transform (analytic signal): this gives the amplitude for every
+// single sample, without an averaging window and therefore without a time
+// offset. Their ratio is the gain of the device over time (in dB), corrected
+// for the loop latency measured with a click before the bursts. The 63 % / 90 %
+// points are interpolated between samples. The analysis runs on a background
+// thread.
 //
 //  - Attack:  at the start of burst 1 the gain drops from its start value to
 //             the compressed value.
@@ -21,7 +25,8 @@
 // moved by dragging and reset with a double-click.
 //
 // The times are given from the step to 63 % (one time constant) and to 90 % of
-// the total gain change. The time resolution is about one period of the test tone.
+// the total gain change. For very fast (VCA) compressors use a higher test frequency
+// (e.g. 5..10 kHz): the gain can only be observed while the sine has amplitude.
 //==============================================================================
 class AttRelComponent final : public juce::Component,
                               private juce::Timer
@@ -34,10 +39,17 @@ public:
         startTimerHz (20);
     }
 
+    ~AttRelComponent() override
+    {
+        pool.removeAllJobs (true, 20000);
+    }
+
     // Called before a new test starts
     void clear()
     {
         result = {};
+        analysing = false;
+        ++jobCounter;   // ignore the result of a running analysis
         repaint();
     }
 
@@ -140,39 +152,48 @@ private:
         if (! processor.isBurstRunning() && runId != analysedRunId && processor.getBurstRecording().length > 0)
         {
             analysedRunId = runId;
-            analyse();
+            startAnalysis();
         }
 
         if (isShowing())
             repaint();
     }
 
-    // Amplitude envelope by I/Q demodulation, moving average over 'window' samples
-    static std::vector<float> envelope (const std::vector<float>& x, int64_t offset, int64_t length,
-                                        double omega, int window)
+    // Amplitude envelope with the Hilbert transform: |analytic signal| for every sample.
+    // Calculated for sample positions [from, to) of x shifted by 'offset';
+    // all other positions of the returned vector (size 'total') are 0.
+    static std::vector<float> hilbertEnvelope (const std::vector<float>& x, int64_t offset,
+                                               int64_t from, int64_t to, int64_t total)
     {
-        std::vector<double> sumI ((size_t) length + 1, 0.0), sumQ ((size_t) length + 1, 0.0);
+        std::vector<float> env ((size_t) total, 0.0f);
+        const auto len = to - from;
+        if (len < 4)
+            return env;
 
-        for (int64_t n = 0; n < length; ++n)
+        int order = 2;
+        while (((int64_t) 1 << order) < len)
+            ++order;
+        const int n = 1 << order;
+
+        juce::dsp::FFT fft (order);
+        std::vector<juce::dsp::Complex<float>> a ((size_t) n), b ((size_t) n);
+
+        for (int64_t i = 0; i < len; ++i)
         {
-            const auto idx = n + offset;
-            const double v = (idx >= 0 && idx < (int64_t) x.size()) ? x[(size_t) idx] : 0.0;
-            sumI[(size_t) n + 1] = sumI[(size_t) n] + v * std::cos (omega * (double) n);
-            sumQ[(size_t) n + 1] = sumQ[(size_t) n] + v * std::sin (omega * (double) n);
+            const auto idx = from + i + offset;
+            a[(size_t) i] = { (idx >= 0 && idx < (int64_t) x.size()) ? x[(size_t) idx] : 0.0f, 0.0f };
         }
 
-        std::vector<float> env ((size_t) length, 0.0f);
-        const int half = window / 2;
+        fft.perform (a.data(), b.data(), false);
 
-        for (int64_t n = 0; n < length; ++n)
-        {
-            const auto a = juce::jlimit ((int64_t) 0, length, n - half);
-            const auto b = juce::jlimit ((int64_t) 0, length, a + window);
-            const double count = (double) juce::jmax ((int64_t) 1, b - a);
-            const double i = (sumI[(size_t) b] - sumI[(size_t) a]) / count;
-            const double q = (sumQ[(size_t) b] - sumQ[(size_t) a]) / count;
-            env[(size_t) n] = (float) (2.0 * std::sqrt (i * i + q * q));
-        }
+        // Analytic signal: keep DC and Nyquist, double the positive, remove the negative frequencies
+        for (int k = 1; k < n / 2; ++k)      b[(size_t) k] *= 2.0f;
+        for (int k = n / 2 + 1; k < n; ++k)  b[(size_t) k] = {};
+
+        fft.perform (b.data(), a.data(), true);
+
+        for (int64_t i = 0; i < len; ++i)
+            env[(size_t) (from + i)] = std::abs (a[(size_t) i]);
 
         return env;
     }
@@ -192,18 +213,61 @@ private:
                                  float start, float end, float fraction, double sr)
     {
         const float change = end - start;
+        float previous = std::numeric_limits<float>::quiet_NaN();
+
         for (int64_t n = event; n < limit; ++n)
         {
             const float v = g[(size_t) n];
-            if (! std::isnan (v) && (v - start) / change >= fraction)
-                return (float) (1000.0 * (double) (n - event) / sr);
+            if (std::isnan (v))
+                continue;
+
+            const float f = (v - start) / change;
+            if (f >= fraction)
+            {
+                // Interpolate between this and the previous sample (sub-sample precision)
+                double pos = (double) n;
+                if (! std::isnan (previous) && f > previous)
+                    pos -= (double) ((f - fraction) / (f - previous));
+
+                return (float) (1000.0 * juce::jmax (0.0, pos - (double) event) / sr);
+            }
+            previous = f;
         }
         return std::numeric_limits<float>::quiet_NaN();
     }
 
-    void analyse()
+    // Copies the recording and evaluates it on the background thread
+    void startAnalysis()
     {
-        const auto& rec = processor.getBurstRecording();
+        auto rec = std::make_shared<BurstRecording> (processor.getBurstRecording());
+        const int jobId = ++jobCounter;
+        analysing = true;
+        juce::Component::SafePointer<AttRelComponent> safe (this);
+
+        pool.addJob ([safe, jobId, rec]
+        {
+            auto r = std::make_shared<Result> (computeResult (*rec));
+
+            juce::MessageManager::callAsync ([safe, jobId, r]
+            {
+                if (safe == nullptr || jobId != safe->jobCounter)
+                    return;
+
+                safe->result    = std::move (*r);
+                safe->analysing = false;
+
+                // Show everything after a new measurement
+                safe->fullT0 = (double) (safe->result.burst1Start - (int64_t) (0.05 * safe->result.sampleRate));
+                safe->fullT1 = (double) (safe->result.burst2End   + (int64_t) (0.05 * safe->result.sampleRate));
+                safe->viewT0 = safe->fullT0;
+                safe->viewT1 = safe->fullT1;
+                safe->repaint();
+            });
+        });
+    }
+
+    static Result computeResult (const BurstRecording& rec)
+    {
         Result r;
 
         r.sampleRate  = rec.sampleRate;
@@ -214,24 +278,27 @@ private:
         r.amp1Db      = juce::Decibels::gainToDecibels (rec.amp1);
         r.amp2Db      = juce::Decibels::gainToDecibels (rec.amp2);
 
-        // Averaging window: whole periods, at least 8 samples
-        const double samplesPerPeriod = rec.sampleRate / rec.freq;
-        const int periods = juce::jmax (1, (int) std::ceil (8.0 / samplesPerPeriod));
-        const int window  = juce::jmax (8, juce::roundToInt (periods * samplesPerPeriod));
-        r.periodMs = (float) (1000.0 * window / rec.sampleRate);
+        // Time step of the analysis: one sample
+        r.periodMs = (float) (1000.0 / rec.sampleRate);
 
-        const double omega  = juce::MathConstants<double>::twoPi * rec.freq / rec.sampleRate;
-        const auto   length = rec.length;
+        // A few samples at the burst edges are excluded (edge effects of the transform)
+        const auto guard  = (int64_t) juce::jmax (2.0, 0.0002 * rec.sampleRate);
+        const auto length = rec.length;
 
-        // Sent envelope at time n, returned envelope at time n + latency
-        const auto envSent = envelope (rec.sent,    0,           length, omega, window);
-        const auto envL    = envelope (rec.returnL, rec.latency, length, omega, window);
-        const auto envR    = envelope (rec.returnR, rec.latency, length, omega, window);
+        // Region for the transform: 50 ms before burst 1 until 50 ms after burst 2
+        const auto margin     = (int64_t) (0.05 * rec.sampleRate);
+        const auto regionFrom = juce::jmax ((int64_t) 0, rec.burst1Start - margin);
+        const auto regionTo   = juce::jmin (length, rec.burst2End + margin);
+
+        // Sent envelope at time n, returned envelopes at time n + latency
+        const auto envSent = hilbertEnvelope (rec.sent,    0,           regionFrom, regionTo, length);
+        const auto envL    = hilbertEnvelope (rec.returnL, rec.latency, regionFrom, regionTo, length);
+        const auto envR    = hilbertEnvelope (rec.returnR, rec.latency, regionFrom, regionTo, length);
 
         const auto gainCurve = [&] (const std::vector<float>& envRet)
         {
             std::vector<float> g ((size_t) length, std::numeric_limits<float>::quiet_NaN());
-            const auto from = rec.burst1Start + window / 2, to = rec.burst2End - window / 2;
+            const auto from = rec.burst1Start + 1, to = rec.burst2End - guard;
 
             for (auto n = from; n < to; ++n)
                 if (envSent[(size_t) n] > 1.0e-6f && envRet[(size_t) n] > 1.0e-9f)
@@ -256,8 +323,8 @@ private:
             const auto slice = [&g] (int64_t a, int64_t b) { return std::vector<float> (g.begin() + a, g.begin() + juce::jmax (a, b)); };
 
             // Settled gain at the end of each burst (median of the last 20 %)
-            const float settled1 = median (slice (rec.burst2Start - len1 / 5, rec.burst2Start - window));
-            const float settled2 = median (slice (rec.burst2End   - len2 / 5, rec.burst2End   - window));
+            const float settled1 = median (slice (rec.burst2Start - len1 / 5, rec.burst2Start - guard));
+            const float settled2 = median (slice (rec.burst2End   - len2 / 5, rec.burst2End   - guard));
 
             // ---- Attack ----
             {
@@ -266,15 +333,16 @@ private:
 
                 if (secondLouder)
                 {
-                    start = settled1;  end = settled2;  limit = rec.burst2End - window / 2;
+                    start = settled1;  end = settled2;  limit = rec.burst2End - guard;
                 }
                 else
                 {
-                    // From silence: the start value is the highest gain in the first two periods
-                    const auto first = slice (rec.burst1Start + window / 2, rec.burst1Start + window / 2 + 2 * window);
+                    // From silence: the start value is the highest gain within the first 0.1 ms
+                    // (short, so that even very fast attacks are not already under way)
+                    const auto first = slice (rec.burst1Start + 1, rec.burst1Start + 1 + (int64_t) juce::jmax (3.0, 0.0001 * rec.sampleRate));
                     start = -1000.0f;
                     for (auto v : first) if (! std::isnan (v)) start = juce::jmax (start, v);
-                    end = settled1;  limit = rec.burst2Start - window / 2;
+                    end = settled1;  limit = rec.burst2Start - guard;
                 }
 
                 ch->attackChange = end - start;
@@ -282,7 +350,7 @@ private:
                 if (std::isnan (start) || std::isnan (end) || start < -999.0f)
                     ch->attackNote = "no signal";
                 else if (std::abs (end - start) < 0.5f)
-                    ch->attackNote = "no gain change (below threshold or faster than " + juce::String (r.periodMs, 1) + " ms)";
+                    ch->attackNote = "no gain change (below threshold or faster than ~0.1 ms)";
                 else
                 {
                     ch->attack63  = timeToFraction (g, r.attackEvent, limit, start, end, 0.632f, rec.sampleRate);
@@ -303,7 +371,7 @@ private:
                     ch->releaseNote = "no gain change";
                 else
                 {
-                    const auto limit = rec.burst2End - window / 2;
+                    const auto limit = rec.burst2End - guard;
                     ch->release63  = timeToFraction (g, r.releaseEvent, limit, start, end, 0.632f, rec.sampleRate);
                     ch->release90  = timeToFraction (g, r.releaseEvent, limit, start, end, 0.9f,   rec.sampleRate);
                     ch->hasRelease = true;
@@ -316,8 +384,8 @@ private:
         }
 
         // Display data: 50 ms before burst 1 until 50 ms after burst 2
-        r.viewStart = juce::jmax ((int64_t) 0, rec.burst1Start - (int64_t) (0.05 * rec.sampleRate));
-        const auto viewEnd = juce::jmin (length, rec.burst2End + (int64_t) (0.05 * rec.sampleRate));
+        r.viewStart = regionFrom;
+        const auto viewEnd = regionTo;
 
         for (auto n = r.viewStart; n < viewEnd; ++n)
         {
@@ -330,13 +398,7 @@ private:
         }
 
         r.valid = true;
-        result = std::move (r);
-
-        // Show everything after a new measurement
-        fullT0 = (double) (result.burst1Start - (int64_t) (0.05 * result.sampleRate));
-        fullT1 = (double) (result.burst2End   + (int64_t) (0.05 * result.sampleRate));
-        viewT0 = fullT0;
-        viewT1 = fullT1;
+        return r;
     }
 
     //==========================================================================
@@ -632,11 +694,12 @@ private:
 
         juce::String status;
         if (running)              status = "Running  " + juce::String (juce::roundToInt (processor.getBurstProgress() * 100.0f)) + " %";
+        else if (analysing)       status = "Analysing...";
         else if (! result.valid)  status = "Ready - press Start";
         else                      status = "Finished";
 
         if (result.valid && ! running)
-            status << "     Latency " << juce::String (result.latencyMs, 2) << " ms     Resolution ~" << juce::String (result.periodMs, 1) << " ms";
+            status << "     Latency " << juce::String (result.latencyMs, 2) << " ms     Time step " << juce::String (result.periodMs, 3) << " ms (1 sample)";
 
         g.drawText (status, area.withHeight (16.0f), juce::Justification::centredLeft);
 
@@ -668,6 +731,9 @@ private:
     AudioPluginAudioProcessor& processor;
     Result   result;
     uint32_t analysedRunId = 0;
+    int  jobCounter = 0;
+    bool analysing = false;
+    juce::ThreadPool pool { 1 };
 
     // Visible time range in samples (zoom), full range, drag start
     double viewT0 = 0.0, viewT1 = 1.0, fullT0 = 0.0, fullT1 = 1.0;
