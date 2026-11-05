@@ -553,6 +553,18 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
         addAndMakeVisible (b);
     }
     (p.isUnitDbu() ? unitDbuButton : unitFsButton).setToggleState (true, juce::dontSendNotification);
+    // ---------------- Input: sidechain (plugin only) ----------------
+    if (p.hasSidechain())
+    {
+        setupLabel (*this, inputLabel, "Input");
+        inputLabel.setJustificationType (juce::Justification::centredRight);
+        sidechainLed.getProperties().set ("led", true);
+        sidechainLed.setInterceptsMouseClicks (false, false);   // display only
+        sidechainLed.setTooltip ("All measurements use the sidechain input");
+        addAndMakeVisible (sidechainLed);
+        sidechainTimer.startTimerHz (4);
+    }
+
     unitFsButton.onClick  = [this] { if (unitFsButton.getToggleState())  { processorRef.setUnitDbu (false); refreshUnits(); } };
     unitDbuButton.onClick = [this] { if (unitDbuButton.getToggleState()) { processorRef.setUnitDbu (true);  refreshUnits(); } };
 
@@ -797,6 +809,11 @@ void AudioPluginAudioProcessorEditor::resized()
         unitDbuButton.setBounds (unitRow.removeFromRight (64));
         unitFsButton.setBounds  (unitRow.removeFromRight (64));
         unitLabel.setBounds     (unitRow.removeFromRight (56));
+
+        // Sidechain indicator left of it (plugin only)
+        unitRow.removeFromRight (18);
+        sidechainLed.setBounds (unitRow.removeFromRight (96));
+        inputLabel.setBounds   (unitRow.removeFromRight (60));
     }
 
     // Right column with the generator (Scope and FFT only)

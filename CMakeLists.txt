@@ -6,6 +6,13 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_subdirectory(libs/JUCE)
 
+# JUCE's AudioPluginHost as test host for debugging the VST3 (build target "AudioPluginHost").
+# It is only built when this target (or "all") is built.
+option(DEVTEST_BUILD_PLUGIN_HOST "Add JUCE's AudioPluginHost to debug the VST3" ON)
+if(DEVTEST_BUILD_PLUGIN_HOST)
+    add_subdirectory(libs/JUCE/extras/AudioPluginHost)
+endif()
+
 juce_add_plugin(DevTest
     COMPANY_NAME "cr-moet"
     PLUGIN_MANUFACTURER_CODE Crmt

@@ -328,6 +328,12 @@ private:
     juce::Label unitLabel;
     juce::TextButton unitFsButton { "dBFS" }, unitDbuButton { "dBu" };
 
+    // Measured input (plugin only): always the sidechain; the LED shows whether the
+    // host feeds it
+    juce::Label inputLabel;
+    juce::TextButton sidechainLed { "Sidechain" };
+    juce::TimedCallback sidechainTimer { [this] { sidechainLed.setToggleState (processorRef.isSidechainConnected(), juce::dontSendNotification); } };
+
     // Options menu (calibration; in the standalone also the audio settings)
     std::function<void()> showAudioSettings;
     juce::Component::SafePointer<juce::Component> calibrationWindow;

@@ -1,7 +1,58 @@
 {
-    // Use IntelliSense to learn about possible attributes.
-    // Hover to view descriptions of existing attributes.
-    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    // Debug configurations for DevTest (Windows, Visual Studio debugger).
+    // Each configuration builds the project first ("CMake: build") and then starts
+    // the program. Breakpoints in the plugin source are bound as soon as the host
+    // has loaded DevTest.vst3.
     "version": "0.2.0",
-    "configurations": []
+    "configurations": [
+        {
+            // VST3 in JUCE's AudioPluginHost (built together with the project)
+            "name": "DevTest VST3 (AudioPluginHost)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/libs/JUCE/extras/AudioPluginHost/AudioPluginHost_artefacts/Debug/AudioPluginHost.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "stopAtEntry": false,
+            "console": "internalConsole",
+            "preLaunchTask": "CMake: build"
+        },
+        {
+            // Standalone app
+            "name": "DevTest Standalone",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/DevTest_artefacts/Debug/Standalone/DevTest.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "stopAtEntry": false,
+            "console": "internalConsole",
+            "preLaunchTask": "CMake: build"
+        },
+        {
+            // VST3 in Ableton Live: adjust "program" to your Live edition/version
+            // (Ableton only finds VST3 in C:\Program Files\Common Files\VST3)
+            "name": "DevTest VST3 (Ableton Live)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "C:/ProgramData/Ableton/Live 12 Suite/Program/Ableton Live 12 Suite.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "stopAtEntry": false,
+            "console": "internalConsole",
+            "preLaunchTask": "CMake: build"
+        },
+        {
+            // VST3 in another host / DAW: adjust "program" to its .exe
+            "name": "DevTest VST3 (REAPER)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "C:/Program Files/REAPER (x64)/reaper.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "stopAtEntry": false,
+            "console": "internalConsole",
+            "preLaunchTask": "CMake: build"
+        }
+    ]
 }

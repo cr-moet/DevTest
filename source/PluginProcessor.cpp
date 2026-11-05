@@ -3,9 +3,7 @@
 
 //==============================================================================
 AudioPluginAudioProcessor::AudioPluginAudioProcessor()
-    : AudioProcessor (BusesProperties()
-                          .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
-                          .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+    : AudioProcessor (makeBusesProperties()),
       apvts (*this, nullptr, "PARAMETERS", createParameterLayout())
 {
     scopeSrcLParam   = apvts.getRawParameterValue (ParamIDs::scopeSourceL);
@@ -671,6 +669,20 @@ void AudioPluginAudioProcessor::pushSweepPoint (const SweepPoint& point) noexcep
     else if (scope.blockSize2 > 0) sweepFifoData[(size_t) scope.startIndex2] = point;
 }
 
+// Main input and output; in the plugin also a stereo sidechain input.
+// The standalone app has no sidechain (inputs are chosen in its audio settings).
+juce::AudioProcessor::BusesProperties AudioPluginAudioProcessor::makeBusesProperties()
+{
+    auto props = BusesProperties()
+                     .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
+                     .withOutput ("Output", juce::AudioChannelSet::stereo(), true);
+
+    if (juce::PluginHostType::getPluginLoadedAs() != juce::AudioProcessor::wrapperType_Standalone)
+        props = props.withInput ("Sidechain", juce::AudioChannelSet::stereo(), true);
+
+    return props;
+}
+
 bool AudioPluginAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
     const auto in  = layouts.getMainInputChannelSet();
@@ -681,6 +693,14 @@ bool AudioPluginAudioProcessor::isBusesLayoutSupported (const BusesLayout& layou
         return set == juce::AudioChannelSet::mono() || set == juce::AudioChannelSet::stereo();
     };
 
+    // Sidechain: mono, stereo or switched off by the host
+    for (int bus = 1; bus < layouts.inputBuses.size(); ++bus)
+    {
+        const auto sc = layouts.getChannelSet (true, bus);
+        if (! sc.isDisabled() && ! ok (sc))
+            return false;
+    }
+
     return ok (in) && ok (out);
 }
 
@@ -689,7 +709,7 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
 {
     juce::ScopedNoDenormals noDenormals;
 
-    const int numIn      = getTotalNumInputChannels();
+    const int numIn      = getMainBusNumInputChannels();   // without the sidechain
     const int numOut     = getTotalNumOutputChannels();
     const int numSamples = buffer.getNumSamples();
     const double sr      = currentSampleRate.load();
@@ -803,6 +823,16 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
     // Inputs (with a mono input, R = L)
     const float* inL = numIn > 0 ? buffer.getReadPointer (0) : nullptr;
     const float* inR = numIn > 1 ? buffer.getReadPointer (1) : inL;
+
+    // Plugin: always measure the sidechain, never the main input of the track
+    // (silence if the host has switched the sidechain off)
+    if (hasSidechain())
+    {
+        auto sidechain = getBusBuffer (buffer, true, 1);
+        inL = sidechain.getNumChannels() > 0 ? sidechain.getReadPointer (0) : nullptr;
+        inR = sidechain.getNumChannels() > 1 ? sidechain.getReadPointer (1) : inL;
+        sidechainConnected = sidechain.getNumChannels() > 0;
+    }
 
     float* outL = numOut > 0 ? buffer.getWritePointer (0) : nullptr;
     float* outR = numOut > 1 ? buffer.getWritePointer (1) : nullptr;

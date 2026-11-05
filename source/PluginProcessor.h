@@ -189,6 +189,12 @@ public:
     // A calibration value is the level in dBu of a sine whose peaks reach 0 dBFS
     // (the usual "0 dBFS = +x dBu" figure of an audio interface). dBu values are
     // RMS levels (0 dBu = 0.775 V RMS). Set from the GUI thread, saved with the state.
+    // Plugin only (not in the standalone app): all measurements use the stereo
+    // sidechain input (in the host: any track, e.g. post mixer); the main input of
+    // the track is ignored. The standalone app measures its normal inputs.
+    bool hasSidechain() const              { return getBusCount (true) > 1; }
+    bool isSidechainConnected() const      { return sidechainConnected.load(); }   // host feeds the sidechain
+
     void setUnitDbu (bool dbu);
     bool isUnitDbu() const noexcept                       { return unitDbu.load(); }
     juce::String getLevelUnit() const                     { return isUnitDbu() ? "dBu" : "dBFS"; }
@@ -218,6 +224,7 @@ private:
     std::atomic<float>* scopeSrcLParam  = nullptr;
     std::atomic<float>* scopeSrcRParam  = nullptr;
     std::atomic<float>* passThroughParam = nullptr;
+    static BusesProperties makeBusesProperties();
     std::atomic<float>* genOnParam      = nullptr;
     std::atomic<float>* genFreqParam    = nullptr;
     std::atomic<float>* genLevelParam   = nullptr;
@@ -367,6 +374,7 @@ private:
     // Units and calibration
     void readCalibrationFromState();
     std::atomic<bool> unitDbu { false };
+    std::atomic<bool> sidechainConnected { false };
     std::array<std::atomic<float>, 2> calIn  { { 18.0f, 18.0f } };   // dBu at 0 dBFS
     std::array<std::atomic<float>, 2> calOut { { 18.0f, 18.0f } };
 
