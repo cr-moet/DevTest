@@ -742,8 +742,6 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
     }
 
     // Read parameters once per block
-    const auto srcL       = (ScopeSource) juce::roundToInt (scopeSrcLParam->load());
-    const auto srcR       = (ScopeSource) juce::roundToInt (scopeSrcRParam->load());
     const bool genOn      = genOnParam->load() > 0.5f;
     const auto genOut     = (GenOutput) juce::roundToInt (genOutputParam->load());
     const auto wave       = (Waveform)  juce::roundToInt (genWaveParam->load());
@@ -754,7 +752,8 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
 
     // While a knee or sweep test runs the input is never passed through: in a hardware
     // loop (output -> device -> input) that would cause feedback
-    const bool passThru   = passThroughParam->load() > 0.5f && ! kneeActive && ! swActive && ! arActive;
+    // Inputs and outputs are chosen in the audio settings (standalone) or in the DAW.
+    // The scope and FFT always show input L and R; the input is not passed through.
 
     const auto arOut      = (KneeOutput) juce::roundToInt (arOutputParam->load());
     const bool arToR      = arOut != KneeOutput::left;
@@ -787,17 +786,6 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
     float* outL = numOut > 0 ? buffer.getWritePointer (0) : nullptr;
     float* outR = numOut > 1 ? buffer.getWritePointer (1) : nullptr;
 
-    const auto pick = [] (ScopeSource s, float l, float r, float g)
-    {
-        switch (s)
-        {
-            case ScopeSource::inputL:    return l;
-            case ScopeSource::inputR:    return r;
-            case ScopeSource::generator: return g;
-            case ScopeSource::off:       break;
-        }
-        return 0.0f;
-    };
 
     for (int i = 0; i < numSamples; ++i)
     {
@@ -1083,12 +1071,11 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
             }
         }
 
-        // The scope/FFT source "Generator" shows the test tone while a test runs
-        const float genForScope = arActive ? burstTone : (swActive ? sweepTone : (kneeOn ? kneeTone : gen));
-        scopeBuffer.push (pick (srcL, l, r, genForScope), pick (srcR, l, r, genForScope));
+        // Scope and FFT show the inputs
+        scopeBuffer.push (l, r);
 
-        float oL = passThru ? l : 0.0f;
-        float oR = passThru ? r : 0.0f;
+        float oL = 0.0f;
+        float oR = 0.0f;
 
         // Knee tone (zero when no test runs) + normal generator (fades to zero during a test)
         if (kneeOn)

@@ -171,8 +171,9 @@ private:
             lastSampleRate = sampleRate;
         }
 
-        showL = juce::roundToInt (srcLParam->load()) != (int) ScopeSource::off;
-        showR = juce::roundToInt (srcRParam->load()) != (int) ScopeSource::off;
+        // Always input L and R (inputs are chosen in the audio settings / the DAW)
+        showL = true;
+        showR = true;
 
         const auto writePos = processor.scopeBuffer.getWritePos();
         if (writePos < (uint64_t) fftSize + 1)

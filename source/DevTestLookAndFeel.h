@@ -10,8 +10,8 @@ namespace DevTestColours
     inline const juce::Colour background { 0xfff2ebd6 };   // background
     inline const juce::Colour text       { 0xff292929 };   // text
     inline const juce::Colour accent     { 0xffd52925 };   // special elements
-    inline const juce::Colour traceL     { 0xff292929 };   // scope channel L
-    inline const juce::Colour traceR     { 0xffd52925 };   // scope channel R
+    inline const juce::Colour traceL     { 0xffd52925 };   // channel L (all displays)
+    inline const juce::Colour traceR     { 0xff292929 };   // channel R (all displays)
 
     // Derived tones for panels and grid lines
     inline const juce::Colour panel      = background.darker (0.06f);

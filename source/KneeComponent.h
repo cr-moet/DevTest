@@ -387,7 +387,7 @@ private:
         g.setColour (running ? accent : text);
 
         if (running)              lineOut ("Running  " + juce::String (juce::roundToInt (processor.getKneeProgress() * 100.0f)) + " %");
-        else if (points.empty())  lineOut ("Ready - press Start");
+        else if (points.empty())  lineOut ("Ready - press START");
         else                      lineOut ("Finished");
 
         g.setFont (juce::Font (juce::FontOptions (12.0f)));

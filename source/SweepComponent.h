@@ -87,9 +87,6 @@ public:
         g.setColour (text.withAlpha (0.6f));
         g.drawRect (areas.plot, 1.0f);
 
-        if (! areas.ir.isEmpty())
-            drawImpulse (g, areas.ir);
-
         drawInfo (g, areas.info, curveL, curveR);
     }
 
@@ -165,8 +162,6 @@ private:
     struct SpectrumData
     {
         Curve left, right;
-        std::vector<float> viewL, viewR;   // windowed impulse response for the small IR display
-        float viewStartMs = 0.0f, viewEndMs = 0.0f;
     };
 
     bool normalise() const      { return normParam->load() > 0.5f; }
@@ -187,7 +182,7 @@ private:
     static constexpr float minFreq = 10.0f;
 
     //==========================================================================
-    struct Areas { juce::Rectangle<float> info, plot, ir; };
+    struct Areas { juce::Rectangle<float> info, plot; };
 
     Areas getAreas() const
     {
@@ -196,12 +191,6 @@ private:
         a.info = r.removeFromTop (58.0f).reduced (12.0f, 2.0f);
 
         r = r.withTrimmedLeft (44.0f).withTrimmedRight (16.0f).withTrimmedBottom (4.0f);
-
-        if (impulseMode() && spectrum != nullptr)
-        {
-            a.ir = r.removeFromBottom (juce::jmax (60.0f, r.getHeight() * 0.22f)).withTrimmedTop (22.0f);
-            r.removeFromBottom (4.0f);
-        }
 
         a.plot = r.withTrimmedBottom (18.0f);
         return a;
@@ -410,7 +399,7 @@ private:
         juce::dsp::FFT fft (order);
         const auto mBins = m / 2 + 1;
 
-        const auto windowed = [&] (const std::vector<float>& ir, std::vector<float>& buffer, std::vector<float>* view)
+        const auto windowed = [&] (const std::vector<float>& ir, std::vector<float>& buffer)
         {
             buffer.assign ((size_t) m * 2, 0.0f);
 
@@ -433,22 +422,6 @@ private:
                 buffer[(size_t) i] = ir[(size_t) src] * w;
             }
 
-            // Reduced copy of the windowed IR for the small display (max. 2000 points, peak-preserving)
-            if (view != nullptr)
-            {
-                const int points = juce::jmin (2000, total);
-                view->assign ((size_t) points, 0.0f);
-                for (int p = 0; p < points; ++p)
-                {
-                    const int a = (int) ((int64_t) p * total / points), b = juce::jmax (a + 1, (int) ((int64_t) (p + 1) * total / points));
-                    float v = 0.0f;
-                    for (int i = a; i < b; ++i)
-                        if (std::abs (buffer[(size_t) i]) > std::abs (v))
-                            v = buffer[(size_t) i];
-                    (*view)[(size_t) p] = v;
-                }
-            }
-
             fft.performRealOnlyForwardTransform (buffer.data(), true);
 
             // Power per bin
@@ -458,11 +431,9 @@ private:
         };
 
         std::vector<float> powL, powR;
-        windowed (d.irL, powL, &out.viewL);
-        windowed (d.irR, powR, &out.viewR);
+        windowed (d.irL, powL);
+        windowed (d.irR, powR);
 
-        out.viewStartMs = (float) (-1000.0 * pre / d.sampleRate);
-        out.viewEndMs   = (float) (1000.0 * length / d.sampleRate);
 
         // Display curve: 1000 log-spaced points, fractional-octave smoothing (power average)
         static constexpr float fractions[] = { 0.0f, 24.0f, 12.0f, 6.0f, 3.0f };
@@ -579,57 +550,6 @@ private:
         g.strokePath (path, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved));
     }
 
-    void drawImpulse (juce::Graphics& g, juce::Rectangle<float> area) const
-    {
-        using namespace DevTestColours;
-
-        g.setColour (text.withAlpha (0.8f));
-        g.setFont (juce::Font (juce::FontOptions (11.0f)));
-        g.drawText ("Impulse response (windowed)   " + juce::String (spectrum->viewStartMs, 1) + " ... "
-                        + juce::String (spectrum->viewEndMs, 1) + " ms",
-                    area.withY (area.getY() - 18.0f).withHeight (16.0f), juce::Justification::centredLeft);
-
-        g.setColour (grid);
-        g.drawLine (area.getX(), area.getCentreY(), area.getRight(), area.getCentreY(), 1.0f);
-
-        // Time 0 (main peak)
-        const float span = spectrum->viewEndMs - spectrum->viewStartMs;
-        if (span > 0.0f)
-        {
-            const float x0 = area.getX() + area.getWidth() * (-spectrum->viewStartMs / span);
-            g.setColour (gridStrong);
-            g.drawLine (x0, area.getY(), x0, area.getBottom(), 1.0f);
-        }
-
-        // Common scale for both channels
-        float peak = 1.0e-9f;
-        for (auto v : spectrum->viewL) peak = juce::jmax (peak, std::abs (v));
-        for (auto v : spectrum->viewR) peak = juce::jmax (peak, std::abs (v));
-
-        const auto draw = [&] (const std::vector<float>& v, juce::Colour colour)
-        {
-            if (v.size() < 2)
-                return;
-
-            juce::Path p;
-            for (size_t i = 0; i < v.size(); ++i)
-            {
-                const float x = area.getX() + area.getWidth() * (float) i / (float) (v.size() - 1);
-                const float y = area.getCentreY() - area.getHeight() * 0.48f * v[i] / peak;
-                if (i == 0) p.startNewSubPath (x, y);
-                else        p.lineTo (x, y);
-            }
-            g.setColour (colour);
-            g.strokePath (p, juce::PathStrokeType (1.2f));
-        };
-
-        draw (spectrum->viewR, traceR);
-        draw (spectrum->viewL, traceL);
-
-        g.setColour (text.withAlpha (0.6f));
-        g.drawRect (area, 1.0f);
-    }
-
     void drawInfo (juce::Graphics& g, juce::Rectangle<float> area, const Curve& left, const Curve& right) const
     {
         using namespace DevTestColours;
@@ -647,7 +567,7 @@ private:
         juce::String status;
         if (running && continuous)                   status = "Continuous";
         else if (running)                            status = "Running  " + juce::String (juce::roundToInt (processor.getSweepProgress() * 100.0f)) + " %";
-        else if (left.empty())                       status = "Ready - press Start";
+        else if (left.empty())                       status = "Ready - press START";
         else                                         status = "Finished";
 
         if (running && ! impulseMode() && ! points.empty())

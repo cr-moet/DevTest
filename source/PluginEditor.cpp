@@ -135,7 +135,7 @@ void KneePage::timerCallback()
 {
     // Button shows the action it will perform
     const bool running = processor.isKneeTestRunning();
-    startButton.setButtonText (running ? "Stop" : "Start test");
+    startButton.setButtonText (running ? "STOP" : "START");
 
     // Settings cannot be changed during a sweep
     for (juce::Component* c : { (juce::Component*) &waveBox, (juce::Component*) &freqSlider,
@@ -146,27 +146,24 @@ void KneePage::timerCallback()
 void KneePage::resized()
 {
     auto area = getLocalBounds();
-    auto row2 = area.removeFromBottom (32);
-    area.removeFromBottom (6);
-    auto row1 = area.removeFromBottom (32);
-    area.removeFromBottom (8);
+
+    // Right column: START and the settings, stacked (label above each control).
+    // The knee display uses the full height to the left of it.
+    auto column = area.removeFromRight (200);
+    area.removeFromRight (12);
     knee.setBounds (area);
 
-    // Row 1: start button, waveform, frequency
-    startButton.setBounds (row1.removeFromLeft (110));
-    row1.removeFromLeft (16);
-    waveLabel.setBounds (row1.removeFromLeft (76));
-    waveBox.setBounds (row1.removeFromLeft (130));
-    row1.removeFromLeft (16);
-    freqLabel.setBounds (row1.removeFromLeft (80));
-    freqSlider.setBounds (row1);
+    startButton.setBounds (column.removeFromTop (36));
+    column.removeFromTop (16);
 
-    // Row 2: sweep time, output of the test tone (inputs L and R are always measured)
-    durationLabel.setBounds (row2.removeFromLeft (90));
-    durationSlider.setBounds (row2.removeFromLeft (juce::jmax (200, row2.getWidth() - 200)));
-    row2.removeFromLeft (16);
-    outputLabel.setBounds (row2.removeFromLeft (56));
-    outputBox.setBounds (row2.removeFromLeft (juce::jmin (100, row2.getWidth())));
+    for (auto [label, control] : { std::pair<juce::Label*, juce::Component*> { &waveLabel, &waveBox },
+                                   { &freqLabel, &freqSlider }, { &durationLabel, &durationSlider },
+                                   { &outputLabel, &outputBox } })
+    {
+        label->setBounds (column.removeFromTop (22));
+        control->setBounds (column.removeFromTop (28));
+        column.removeFromTop (10);
+    }
 }
 
 //==============================================================================
@@ -252,7 +249,7 @@ void SweepPage::timerCallback()
     const bool impulse = juce::roundToInt (processor.apvts.getRawParameterValue (ParamIDs::swMode)->load())
                          == (int) SweepMode::impulse;
 
-    startButton.setButtonText (running ? "Stop" : (impulse ? "Start" : "Start sweep"));
+    startButton.setButtonText (running ? "STOP" : "START");
 
     // Settings of the test signal cannot be changed during a run
     // (display settings, averages and "Continuous" can)
@@ -404,7 +401,7 @@ AttRelPage::AttRelPage (AudioPluginAudioProcessor& p)
 void AttRelPage::timerCallback()
 {
     const bool running = processor.isBurstRunning();
-    startButton.setButtonText (running ? "Stop" : "Start test");
+    startButton.setButtonText (running ? "STOP" : "START");
 
     for (juce::Component* c : { (juce::Component*) &freqSlider, (juce::Component*) &len1Slider, (juce::Component*) &level1Slider,
                                 (juce::Component*) &len2Slider, (juce::Component*) &level2Slider, (juce::Component*) &outputBox })
@@ -480,19 +477,11 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
     addChildComponent (sweepPage);
     addChildComponent (attRelPage);
 
-    // ---------------- Channels ----------------
     auto& s = processorRef.apvts;
 
-    addAndMakeVisible (channelGroup);
-    setupLabel (*this, srcLLabel, "Channel L");
-    setupLabel (*this, srcRLabel, "Channel R");
-    setupCombo (*this, srcLBox, s, ParamIDs::scopeSourceL);
-    setupCombo (*this, srcRBox, s, ParamIDs::scopeSourceR);
-    addAndMakeVisible (passThroughButton);
-
-    // ---------------- Generator ----------------
-    addAndMakeVisible (genGroup);
-    addAndMakeVisible (genOnButton);
+    // ---------------- Generator (Scope and FFT only) ----------------
+    addChildComponent (genGroup);
+    addChildComponent (genOnButton);
     setupLabel (*this, waveLabel,   "Waveform");
     setupLabel (*this, freqLabel,   "Frequency");
     setupLabel (*this, levelLabel,  "Amplitude");
@@ -502,26 +491,16 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
     setupSlider (*this, freqSlider);
     setupSlider (*this, levelSlider);
 
-    // ---------------- Input/output hint ----------------
-    const bool isStandalone = processorRef.wrapperType == juce::AudioProcessor::wrapperType_Standalone;
-    ioHint.setText (isStandalone
-                        ? "Select the audio interface (ASIO) and input/output channels via \"Options\" -> \"Audio/MIDI Settings\" at the top."
-                        : "Inputs and outputs are routed in the DAW.",
-                    juce::dontSendNotification);
-    ioHint.setFont (juce::Font (juce::FontOptions (12.0f)));
-    ioHint.setColour (juce::Label::textColourId, DevTestColours::text.withAlpha (0.7f));
-    ioHint.setJustificationType (juce::Justification::topLeft);
-    addAndMakeVisible (ioHint);
+    genOutAttach = std::make_unique<ComboAttachment>  (s, ParamIDs::genOutput, genOutBox);
+    waveAttach   = std::make_unique<ComboAttachment>  (s, ParamIDs::genWave,   waveBox);
+    freqAttach   = std::make_unique<SliderAttachment> (s, ParamIDs::genFreq,   freqSlider);
+    levelAttach  = std::make_unique<SliderAttachment> (s, ParamIDs::genLevel,  levelSlider);
+    genOnAttach  = std::make_unique<ButtonAttachment> (s, ParamIDs::genOn,     genOnButton);
 
-    // ---------------- Connect parameters ----------------
-    srcLAttach   = std::make_unique<ComboAttachment>  (s, ParamIDs::scopeSourceL, srcLBox);
-    srcRAttach   = std::make_unique<ComboAttachment>  (s, ParamIDs::scopeSourceR, srcRBox);
-    genOutAttach = std::make_unique<ComboAttachment>  (s, ParamIDs::genOutput,    genOutBox);
-    waveAttach   = std::make_unique<ComboAttachment>  (s, ParamIDs::genWave,      waveBox);
-    freqAttach   = std::make_unique<SliderAttachment> (s, ParamIDs::genFreq,      freqSlider);
-    levelAttach  = std::make_unique<SliderAttachment> (s, ParamIDs::genLevel,     levelSlider);
-    passAttach   = std::make_unique<ButtonAttachment> (s, ParamIDs::passThrough,  passThroughButton);
-    genOnAttach  = std::make_unique<ButtonAttachment> (s, ParamIDs::genOn,        genOnButton);
+    // ---------------- Standalone window buttons (hidden in the plugin) ----------------
+    addChildComponent (optionsButton);
+    addChildComponent (minimiseButton);
+    addChildComponent (closeButton);
 
     // Restore the last selected tab (saved with the project)
     const int lastPage = juce::jlimit (0, 4, (int) processorRef.apvts.state.getProperty ("page", 0));
@@ -541,12 +520,76 @@ AudioPluginAudioProcessorEditor::~AudioPluginAudioProcessorEditor()
 
 void AudioPluginAudioProcessorEditor::showPage (int index)
 {
+    currentPage = index;
     scopePage.setVisible (index == 0);
     fftPage.setVisible   (index == 1);
     kneePage.setVisible  (index == 2);
     sweepPage.setVisible (index == 3);
     attRelPage.setVisible (index == 4);
+
+    // The generator is only needed with Scope and FFT; the other tabs use the full width
+    const bool showGenerator = index <= 1;
+    for (juce::Component* c : { (juce::Component*) &genGroup, (juce::Component*) &genOnButton,
+                                (juce::Component*) &waveLabel, (juce::Component*) &freqLabel,
+                                (juce::Component*) &levelLabel, (juce::Component*) &genOutLabel,
+                                (juce::Component*) &waveBox, (juce::Component*) &genOutBox,
+                                (juce::Component*) &freqSlider, (juce::Component*) &levelSlider })
+        c->setVisible (showGenerator);
+
     processorRef.apvts.state.setProperty ("page", index, nullptr);
+    resized();
+}
+
+void AudioPluginAudioProcessorEditor::setWindowControls (std::function<void()> onClose, std::function<void()> onMinimise,
+                                                         std::function<void()> onOptions)
+{
+    closeButton.onClick    = std::move (onClose);
+    minimiseButton.onClick = std::move (onMinimise);
+    optionsButton.onClick  = std::move (onOptions);
+
+    hasWindowControls = true;
+    closeButton.setVisible (true);
+    minimiseButton.setVisible (true);
+    optionsButton.setVisible (true);
+    resized();
+}
+
+bool AudioPluginAudioProcessorEditor::isCaptionArea (juce::Point<int> position) const
+{
+    if (! hasWindowControls || position.y < 0 || position.y >= headerHeight)
+        return false;
+
+    for (auto* button : { &optionsButton, &minimiseButton, &closeButton })
+        if (button->getBounds().contains (position))
+            return false;
+
+    return true;
+}
+
+// Standalone: dragging the header moves the borderless window.
+// On Windows the system does this (the window reports the header as its title bar,
+// see StandaloneApp.cpp), so these mouse events only arrive on other systems.
+// There the window follows the mouse in screen coordinates.
+void AudioPluginAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
+{
+    draggingWindow = false;
+
+    if (! isCaptionArea (e.getPosition()))
+        return;
+
+    if (auto* window = getTopLevelComponent())
+    {
+        draggingWindow     = true;
+        dragStartWindowPos = window->getScreenPosition();
+        dragStartMouse     = e.getScreenPosition();
+    }
+}
+
+void AudioPluginAudioProcessorEditor::mouseDrag (const juce::MouseEvent& e)
+{
+    if (draggingWindow)
+        if (auto* window = getTopLevelComponent())
+            window->setTopLeftPosition (dragStartWindowPos + (e.getScreenPosition() - dragStartMouse));
 }
 
 //==============================================================================
@@ -605,13 +648,28 @@ void AudioPluginAudioProcessorEditor::resized()
 {
     layoutTitle();
 
+    // Window buttons in the top right corner (standalone only)
+    {
+        auto buttons = getLocalBounds().removeFromTop (16 + 6).withTrimmedTop (6).withTrimmedRight (6);
+        closeButton.setBounds    (buttons.removeFromRight (16));
+        buttons.removeFromRight (4);
+        minimiseButton.setBounds (buttons.removeFromRight (16));
+        buttons.removeFromRight (4);
+        optionsButton.setBounds  (buttons.removeFromRight (16));
+    }
+
     auto area = getLocalBounds();
     area.removeFromTop (headerHeight);
     area.reduce (12, 10);
 
-    // Right column with controls
-    auto panel = area.removeFromRight (310);
-    area.removeFromRight (12);
+    // Right column with the generator (Scope and FFT only)
+    const bool showGenerator = currentPage <= 1;
+    juce::Rectangle<int> panel;
+    if (showGenerator)
+    {
+        panel = area.removeFromRight (310);
+        area.removeFromRight (12);
+    }
 
     // Tabs above the display
     auto tabRow = area.removeFromTop (30);
@@ -628,28 +686,15 @@ void AudioPluginAudioProcessorEditor::resized()
     sweepPage.setBounds (area);
     attRelPage.setBounds (area);
 
+    if (! showGenerator)
+        return;
+
     constexpr int rowH = 30, gap = 6, labelW = 92;
 
-    // ---------------- Channels group ----------------
-    auto chArea = panel.removeFromTop (28 + 3 * (rowH + gap) + 8);
-    channelGroup.setBounds (chArea);
-    chArea = chArea.reduced (12).withTrimmedTop (14);
-
-    auto row = chArea.removeFromTop (rowH);
-    srcLLabel.setBounds (row.removeFromLeft (labelW));
-    srcLBox.setBounds (row);
-    chArea.removeFromTop (gap);
-
-    row = chArea.removeFromTop (rowH);
-    srcRLabel.setBounds (row.removeFromLeft (labelW));
-    srcRBox.setBounds (row);
-    chArea.removeFromTop (gap);
-
-    passThroughButton.setBounds (chArea.removeFromTop (rowH));
-
-    panel.removeFromTop (12);
-
     // ---------------- Generator group ----------------
+    // The outline of the group starts at the top of the display frame (Scope / FFT plot):
+    // tabs (30) + gap (8) + space above the plot (24), minus half the group title height
+    panel.removeFromTop (30 + 8 + 24 - 7);
     auto genArea = panel.removeFromTop (28 + 5 * (rowH + gap) + 8);
     genGroup.setBounds (genArea);
     genArea = genArea.reduced (12).withTrimmedTop (14);
@@ -662,12 +707,9 @@ void AudioPluginAudioProcessorEditor::resized()
 
     for (auto [label, comp] : rows)
     {
-        row = genArea.removeFromTop (rowH);
+        auto row = genArea.removeFromTop (rowH);
         label->setBounds (row.removeFromLeft (labelW));
         comp->setBounds (row);
         genArea.removeFromTop (gap);
     }
-
-    panel.removeFromTop (12);
-    ioHint.setBounds (panel.removeFromTop (60));
 }

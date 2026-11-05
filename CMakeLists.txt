@@ -19,13 +19,15 @@ juce_add_plugin(DevTest
 
 target_sources(DevTest PRIVATE
     source/PluginProcessor.cpp
-    source/PluginEditor.cpp)
+    source/PluginEditor.cpp
+    source/StandaloneApp.cpp)
 
 target_compile_definitions(DevTest PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
-    JUCE_ASIO=1)
+    JUCE_ASIO=1
+    JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1)   # own borderless standalone window (source/StandaloneApp.cpp)
 
 # Source files are UTF-8
 target_compile_options(DevTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)

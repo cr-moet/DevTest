@@ -695,7 +695,7 @@ private:
         juce::String status;
         if (running)              status = "Running  " + juce::String (juce::roundToInt (processor.getBurstProgress() * 100.0f)) + " %";
         else if (analysing)       status = "Analysing...";
-        else if (! result.valid)  status = "Ready - press Start";
+        else if (! result.valid)  status = "Ready - press START";
         else                      status = "Finished";
 
         if (result.valid && ! running)

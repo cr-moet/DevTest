@@ -98,7 +98,7 @@ private:
     AudioPluginAudioProcessor& processor;
     KneeComponent knee;
 
-    juce::TextButton startButton { "Start test" };
+    juce::TextButton startButton { "START" };
     juce::Label    waveLabel, freqLabel, durationLabel, outputLabel;
     juce::ComboBox waveBox, outputBox;
     juce::Slider   freqSlider, durationSlider;
@@ -124,7 +124,7 @@ private:
     AudioPluginAudioProcessor& processor;
     SweepComponent sweep;
 
-    juce::TextButton startButton { "Start sweep" };
+    juce::TextButton startButton { "START" };
     juce::Label    modeLabel, lawLabel, endLabel, durationLabel, levelLabel, outputLabel;
     juce::ComboBox modeBox, lawBox, endBox, outputBox;
     juce::Slider   durationSlider, levelSlider;
@@ -162,13 +162,66 @@ private:
     AudioPluginAudioProcessor& processor;
     AttRelComponent display;
 
-    juce::TextButton startButton { "Start test" };
+    juce::TextButton startButton { "START" };
     juce::Label  freqLabel, outputLabel, burst1Label, burst2Label, len1Label, level1Label, len2Label, level2Label;
     juce::Slider freqSlider, len1Slider, level1Slider, len2Slider, level2Slider;
     juce::ComboBox outputBox;
 
     std::unique_ptr<SliderAttachment> freqAttach, len1Attach, level1Attach, len2Attach, level2Attach;
     std::unique_ptr<ComboAttachment>  outputAttach;
+};
+
+//==============================================================================
+// Small buttons for the standalone window: options (three dots), minimise, close
+//==============================================================================
+class WindowButton final : public juce::Button
+{
+public:
+    enum class Type { options, minimise, close };
+
+    WindowButton (Type t, juce::Colour c)
+        : juce::Button (t == Type::options ? "Options" : (t == Type::minimise ? "Minimise" : "Close")),
+          type (t), colour (c)
+    {
+        setTooltip (getName());
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    }
+
+    void paintButton (juce::Graphics& g, bool highlighted, bool down) override
+    {
+        const auto area = getLocalBounds().toFloat().reduced (1.0f);
+
+        if (highlighted || down)
+        {
+            g.setColour (colour.withAlpha (down ? 0.18f : 0.10f));
+            g.fillRoundedRectangle (area, 3.0f);
+        }
+
+        g.setColour (colour);
+        const auto c = area.getCentre();
+        const float s = juce::jmin (area.getWidth(), area.getHeight()) * 0.28f;   // half size of the symbol
+
+        switch (type)
+        {
+            case Type::options:   // three dots on top of each other
+                for (int i = -1; i <= 1; ++i)
+                    g.fillEllipse (juce::Rectangle<float> (2.6f, 2.6f).withCentre ({ c.x, c.y + (float) i * s * 1.1f }));
+                break;
+
+            case Type::minimise:
+                g.fillRect (juce::Rectangle<float> (2.0f * s, 1.6f).withCentre ({ c.x, c.y + s * 0.8f }));
+                break;
+
+            case Type::close:
+                g.drawLine (c.x - s, c.y - s, c.x + s, c.y + s, 1.6f);
+                g.drawLine (c.x - s, c.y + s, c.x + s, c.y - s, 1.6f);
+                break;
+        }
+    }
+
+private:
+    Type type;
+    juce::Colour colour;
 };
 
 //==============================================================================
@@ -180,6 +233,19 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+
+    // Standalone only: shows the window buttons (close, minimise, options) in the
+    // header and makes the header draggable to move the borderless window
+    void setWindowControls (std::function<void()> onClose, std::function<void()> onMinimise,
+                            std::function<void()> onOptions);
+
+    // Standalone: true for the part of the header that moves the window (title bar
+    // area without the window buttons). Used by the window for the system's own
+    // window dragging (Windows); elsewhere the editor moves the window itself.
+    bool isCaptionArea (juce::Point<int> position) const;
+
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
 
 private:
     void showPage (int index);
@@ -198,29 +264,30 @@ private:
     KneePage  kneePage;
     SweepPage sweepPage;
     AttRelPage attRelPage;
+    int currentPage = 0;
 
-    // Channels (shared by Scope and FFT)
-    juce::GroupComponent channelGroup { {}, "CHANNELS" };
-    juce::Label    srcLLabel, srcRLabel;
-    juce::ComboBox srcLBox, srcRBox;
-    juce::ToggleButton passThroughButton { "Pass input through to output" };
-
-    // Generator (shared by Scope and FFT)
+    // Generator (only shown with Scope and FFT)
     juce::GroupComponent genGroup { {}, "SIGNAL GENERATOR" };
     juce::ToggleButton genOnButton { "Generator on" };
     juce::Label    waveLabel, freqLabel, levelLabel, genOutLabel;
     juce::ComboBox waveBox, genOutBox;
     juce::Slider   freqSlider, levelSlider;
 
-    juce::Label ioHint;
+    // Standalone window buttons
+    WindowButton optionsButton  { WindowButton::Type::options,  DevTestColours::text };
+    WindowButton minimiseButton { WindowButton::Type::minimise, DevTestColours::text };
+    WindowButton closeButton    { WindowButton::Type::close,    DevTestColours::accent };
+    bool hasWindowControls = false;
+    bool draggingWindow = false;
+    juce::Point<int> dragStartWindowPos, dragStartMouse;   // screen coordinates
 
     // Program name in a framed box (text is drawn as a path so it can be centred exactly)
     juce::Path titlePath;
     juce::Rectangle<float> titleBox;
 
-    std::unique_ptr<ComboAttachment>  srcLAttach, srcRAttach, genOutAttach, waveAttach;
+    std::unique_ptr<ComboAttachment>  genOutAttach, waveAttach;
     std::unique_ptr<SliderAttachment> freqAttach, levelAttach;
-    std::unique_ptr<ButtonAttachment> passAttach, genOnAttach;
+    std::unique_ptr<ButtonAttachment> genOnAttach;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioPluginAudioProcessorEditor)
 };

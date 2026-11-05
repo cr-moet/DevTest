@@ -66,8 +66,9 @@ private:
         const int windowLen   = juce::jlimit (2, ScopeBuffer::size / 2,
                                               (int) std::round (msPerDiv * 0.001 * numDivsX * sr));
 
-        showL = juce::roundToInt (srcLParam->load()) != (int) ScopeSource::off;
-        showR = juce::roundToInt (srcRParam->load()) != (int) ScopeSource::off;
+        // Always input L and R (inputs are chosen in the audio settings / the DAW)
+        showL = true;
+        showR = true;
 
         const auto& buf     = processor.scopeBuffer;
         const auto writePos = buf.getWritePos();
