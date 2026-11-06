@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.22)
 project(DevTest VERSION 0.1.0)
 
 set(CMAKE_CXX_STANDARD 20)
+
+# MSVC: link the C++ runtime statically, so DevTest.exe and the VST3 also run on
+# computers without the "Visual C++ Redistributable" installed
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_subdirectory(libs/JUCE)
