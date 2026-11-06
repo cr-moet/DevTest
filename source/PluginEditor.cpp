@@ -108,8 +108,7 @@ KneePage::KneePage (AudioPluginAudioProcessor& p)
 {
     addAndMakeVisible (knee);
 
-    startButton.setColour (juce::TextButton::buttonColourId,  DevTestColours::accent);
-    startButton.setColour (juce::TextButton::textColourOffId, DevTestColours::background);
+    setupStartButton (*this, startButton);
     startButton.onClick = [this]
     {
         if (processor.isKneeTestRunning())
@@ -118,16 +117,13 @@ KneePage::KneePage (AudioPluginAudioProcessor& p)
         }
         else
         {
-            // Switch the normal generator off, so it does not come back after the test
-            if (auto* genOn = processor.apvts.getParameter (ParamIDs::genOn))
-                genOn->setValueNotifyingHost (0.0f);
+            switchGeneratorOff (processor.apvts);
 
             knee.clear();
             processor.startKneeTest();
         }
         timerCallback();
     };
-    addAndMakeVisible (startButton);
 
     setupLabel (*this, waveLabel,     "Waveform");
     setupLabel (*this, freqLabel,     "Frequency");
@@ -157,8 +153,7 @@ void KneePage::timerCallback()
     startButton.setButtonText (running ? "STOP" : "START");
 
     // Settings cannot be changed during a sweep
-    for (juce::Component* c : { (juce::Component*) &waveBox, (juce::Component*) &freqSlider,
-                                (juce::Component*) &durationSlider, (juce::Component*) &outputBox })
+    for (auto* c : std::initializer_list<juce::Component*> { &waveBox, &freqSlider, &durationSlider, &outputBox })
         c->setEnabled (! running);
 }
 
@@ -197,8 +192,7 @@ SweepPage::SweepPage (AudioPluginAudioProcessor& p)
 {
     addAndMakeVisible (sweep);
 
-    startButton.setColour (juce::TextButton::buttonColourId,  DevTestColours::accent);
-    startButton.setColour (juce::TextButton::textColourOffId, DevTestColours::background);
+    setupStartButton (*this, startButton);
     startButton.onClick = [this]
     {
         if (processor.isSweepRunning())
@@ -207,16 +201,13 @@ SweepPage::SweepPage (AudioPluginAudioProcessor& p)
         }
         else
         {
-            // Switch the normal generator off, so it does not come back after the test
-            if (auto* genOn = processor.apvts.getParameter (ParamIDs::genOn))
-                genOn->setValueNotifyingHost (0.0f);
+            switchGeneratorOff (processor.apvts);
 
             sweep.clear();
             processor.startSweepTest();
         }
         timerCallback();
     };
-    addAndMakeVisible (startButton);
 
     setupLabel (*this, modeLabel,     "Mode");
     setupLabel (*this, lawLabel,      "Law");
@@ -281,9 +272,8 @@ void SweepPage::timerCallback()
 
     // Settings of the test signal cannot be changed during a run
     // (display settings, averages and "Continuous" can)
-    for (juce::Component* c : { (juce::Component*) &modeBox, (juce::Component*) &lawBox, (juce::Component*) &endBox,
-                                (juce::Component*) &durationSlider, (juce::Component*) &levelSlider,
-                                (juce::Component*) &outputBox, (juce::Component*) &intervalBox })
+    for (auto* c : std::initializer_list<juce::Component*> { &modeBox, &lawBox, &endBox, &durationSlider,
+                                                            &levelSlider, &outputBox, &intervalBox })
         c->setEnabled (! running);
 
     // Sweep mode: law + duration. Impulse mode: interval + averages ("Continuous" applies to both)
@@ -389,8 +379,7 @@ AttRelPage::AttRelPage (AudioPluginAudioProcessor& p)
 {
     addAndMakeVisible (display);
 
-    startButton.setColour (juce::TextButton::buttonColourId,  DevTestColours::accent);
-    startButton.setColour (juce::TextButton::textColourOffId, DevTestColours::background);
+    setupStartButton (*this, startButton);
     startButton.onClick = [this]
     {
         if (processor.isBurstRunning())
@@ -399,16 +388,13 @@ AttRelPage::AttRelPage (AudioPluginAudioProcessor& p)
         }
         else
         {
-            // Switch the normal generator off, so it does not come back after the test
-            if (auto* genOn = processor.apvts.getParameter (ParamIDs::genOn))
-                genOn->setValueNotifyingHost (0.0f);
+            switchGeneratorOff (processor.apvts);
 
             display.clear();
             processor.startBurstTest();
         }
         timerCallback();
     };
-    addAndMakeVisible (startButton);
 
     setupLabel (*this, freqLabel,   "Frequency");
     setupLabel (*this, outputLabel, "Output");
@@ -444,8 +430,8 @@ void AttRelPage::timerCallback()
     const bool running = processor.isBurstRunning();
     startButton.setButtonText (running ? "STOP" : "START");
 
-    for (juce::Component* c : { (juce::Component*) &freqSlider, (juce::Component*) &len1Slider, (juce::Component*) &level1Slider,
-                                (juce::Component*) &len2Slider, (juce::Component*) &level2Slider, (juce::Component*) &outputBox })
+    for (auto* c : std::initializer_list<juce::Component*> { &freqSlider, &len1Slider, &level1Slider,
+                                                            &len2Slider, &level2Slider, &outputBox })
         c->setEnabled (! running);
 }
 
@@ -580,6 +566,8 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
     tabs[lastPage]->setToggleState (true, juce::dontSendNotification);
     showPage (lastPage);
 
+    layoutTitle();   // fixed position, does not depend on the window size
+
     setResizable (true, true);
     setResizeLimits (860, 560, 2400, 1600);
     setSize (1060, 680);
@@ -602,8 +590,7 @@ void AudioPluginAudioProcessorEditor::switchPage (int index)
         return;
 
     if (index > 1)
-        if (auto* genOn = processorRef.apvts.getParameter (ParamIDs::genOn))
-            genOn->setValueNotifyingHost (0.0f);
+        switchGeneratorOff (processorRef.apvts);
 
     if (processorRef.isKneeTestRunning())  processorRef.stopKneeTest();
     if (processorRef.isSweepRunning())     processorRef.stopSweepTest();
@@ -615,19 +602,16 @@ void AudioPluginAudioProcessorEditor::switchPage (int index)
 void AudioPluginAudioProcessorEditor::showPage (int index)
 {
     currentPage = index;
-    scopePage.setVisible (index == 0);
-    fftPage.setVisible   (index == 1);
-    kneePage.setVisible  (index == 2);
-    sweepPage.setVisible (index == 3);
-    attRelPage.setVisible (index == 4);
+
+    int i = 0;
+    for (auto* page : std::initializer_list<juce::Component*> { &scopePage, &fftPage, &kneePage, &sweepPage, &attRelPage })
+        page->setVisible (i++ == index);
 
     // The generator is only needed with Scope and FFT; the other tabs use the full width
     const bool showGenerator = index <= 1;
-    for (juce::Component* c : { (juce::Component*) &genGroup, (juce::Component*) &genOnButton,
-                                (juce::Component*) &waveLabel, (juce::Component*) &freqLabel,
-                                (juce::Component*) &levelLabel, (juce::Component*) &genOutLabel,
-                                (juce::Component*) &waveBox, (juce::Component*) &genOutBox,
-                                (juce::Component*) &freqSlider, (juce::Component*) &levelSlider })
+    for (auto* c : std::initializer_list<juce::Component*> { &genGroup, &genOnButton, &waveLabel, &freqLabel,
+                                                            &levelLabel, &genOutLabel, &waveBox, &genOutBox,
+                                                            &freqSlider, &levelSlider })
         c->setVisible (showGenerator);
 
     processorRef.apvts.state.setProperty ("page", index, nullptr);
@@ -694,52 +678,12 @@ bool AudioPluginAudioProcessorEditor::isCaptionArea (juce::Point<int> position) 
 // Standalone: dragging the header moves the borderless window
 void AudioPluginAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
 {
-    draggingWindow = false;
-
-    if (! isCaptionArea (e.getPosition()))
-        return;
-
-    if (auto* window = getTopLevelComponent())
-    {
-        draggingWindow     = true;
-        dragStartWindowPos = window->getScreenPosition();
-        dragStartMouse     = juce::Desktop::getMousePosition();
-        dragTimer.startTimerHz (120);   // keeps following even if mouse events get lost
-    }
+    if (isCaptionArea (e.getPosition()))
+        windowDragger.start();
 }
 
-void AudioPluginAudioProcessorEditor::mouseDrag (const juce::MouseEvent&)
-{
-    updateWindowDrag();
-}
-
-void AudioPluginAudioProcessorEditor::mouseUp (const juce::MouseEvent&)
-{
-    updateWindowDrag();
-    draggingWindow = false;
-    dragTimer.stopTimer();
-}
-
-void AudioPluginAudioProcessorEditor::updateWindowDrag()
-{
-    if (! draggingWindow)
-        return;
-
-    // Mouse button released (also outside the window): stop
-    if (! juce::ModifierKeys::getCurrentModifiersRealtime().isLeftButtonDown())
-    {
-        draggingWindow = false;
-        dragTimer.stopTimer();
-        return;
-    }
-
-    if (auto* window = getTopLevelComponent())
-    {
-        const auto target = dragStartWindowPos + (juce::Desktop::getMousePosition() - dragStartMouse);
-        if (window->getScreenPosition() != target)
-            window->setTopLeftPosition (target);
-    }
-}
+void AudioPluginAudioProcessorEditor::mouseDrag (const juce::MouseEvent&)  { windowDragger.update(); }
+void AudioPluginAudioProcessorEditor::mouseUp (const juce::MouseEvent&)    { windowDragger.stop(); }
 
 //==============================================================================
 // Places the program name in a box with the same spacing on all four sides.
@@ -802,8 +746,6 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
 
 void AudioPluginAudioProcessorEditor::resized()
 {
-    layoutTitle();
-
     // Window buttons in the top right corner (standalone only)
     {
         // (in the plugin only the options button, at the right edge)
@@ -853,11 +795,8 @@ void AudioPluginAudioProcessorEditor::resized()
     attRelTab.setBounds (tabRow.removeFromLeft (90));
     area.removeFromTop (8);
 
-    scopePage.setBounds (area);
-    fftPage.setBounds   (area);
-    kneePage.setBounds  (area);
-    sweepPage.setBounds (area);
-    attRelPage.setBounds (area);
+    for (auto* page : std::initializer_list<juce::Component*> { &scopePage, &fftPage, &kneePage, &sweepPage, &attRelPage })
+        page->setBounds (area);
 
     if (! showGenerator)
         return;

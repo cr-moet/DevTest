@@ -9,11 +9,8 @@
 //==============================================================================
 namespace ParamIDs
 {
-    inline constexpr const char* scopeSourceL = "scopeSrcL";
-    inline constexpr const char* scopeSourceR = "scopeSrcR";
     inline constexpr const char* timePerDiv   = "timePerDiv";
     inline constexpr const char* trigger      = "trigger";
-    inline constexpr const char* passThrough  = "passThrough";
     inline constexpr const char* genOn        = "genOn";
     inline constexpr const char* genFreq      = "genFreq";
     inline constexpr const char* genLevel     = "genLevel";
@@ -50,7 +47,6 @@ namespace ParamIDs
 }
 
 // Order must match the choice parameters
-enum class ScopeSource { off = 0, inputL, inputR, generator };
 enum class GenOutput   { off = 0, left, right, both };
 enum class Waveform    { sine = 0, saw, triangle, square };
 enum class KneeOutput  { left = 0, right, both };
@@ -185,16 +181,17 @@ public:
     const BurstRecording& getBurstRecording() const noexcept { return burstRecording; }
 
     //==========================================================================
+    // Measured input. Plugin: always the stereo sidechain input (in the host any
+    // track, e.g. post mixer); the main input of the track is ignored.
+    // Standalone app: no sidechain, the normal inputs are measured.
+    bool hasSidechain() const              { return getBusCount (true) > 1; }
+    bool isSidechainConnected() const      { return sidechainConnected.load(); }   // host feeds the sidechain
+
+    //==========================================================================
     // Level units and calibration.
     // A calibration value is the level in dBu of a sine whose peaks reach 0 dBFS
     // (the usual "0 dBFS = +x dBu" figure of an audio interface). dBu values are
     // RMS levels (0 dBu = 0.775 V RMS). Set from the GUI thread, saved with the state.
-    // Plugin only (not in the standalone app): all measurements use the stereo
-    // sidechain input (in the host: any track, e.g. post mixer); the main input of
-    // the track is ignored. The standalone app measures its normal inputs.
-    bool hasSidechain() const              { return getBusCount (true) > 1; }
-    bool isSidechainConnected() const      { return sidechainConnected.load(); }   // host feeds the sidechain
-
     void setUnitDbu (bool dbu);
     bool isUnitDbu() const noexcept                       { return unitDbu.load(); }
     juce::String getLevelUnit() const                     { return isUnitDbu() ? "dBu" : "dBFS"; }
@@ -215,16 +212,21 @@ public:
     // Reference tone for the calibration: 1 kHz sine on both outputs, level per
     // output in dBFS (replaces all other output signals while it is on)
     void setCalibrationTone (bool on, float levelDbL, float levelDbR) noexcept;
-    bool isCalibrationToneOn() const noexcept  { return calToneOn.load(); }
 
 private:
+    static BusesProperties makeBusesProperties();
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
+    // processBlock is split into the parts below (all called on the audio thread)
+    void handleTestRequests (double sr) noexcept;
+    float processKneeSample (float l, float r, Waveform wave, double dt) noexcept;
+    float processSweepSample (float l, float r, double sr, bool continuous) noexcept;
+    float processBurstSample (float l, float r, double sr) noexcept;
+    float nextCalibrationToneSample (double sr) noexcept;
+    void updateInputMeter (double sumSqL, double sumSqR, int numSamples, double sr) noexcept;
+    void updateProgress (bool continuous) noexcept;
+
     // Pointers to the parameter values (thread-safe to read)
-    std::atomic<float>* scopeSrcLParam  = nullptr;
-    std::atomic<float>* scopeSrcRParam  = nullptr;
-    std::atomic<float>* passThroughParam = nullptr;
-    static BusesProperties makeBusesProperties();
     std::atomic<float>* genOnParam      = nullptr;
     std::atomic<float>* genFreqParam    = nullptr;
     std::atomic<float>* genLevelParam   = nullptr;
@@ -255,7 +257,7 @@ private:
     bool     kneeActive = false;
     uint32_t kneeRunId = 0;
     int64_t  kneePos = 0, kneeLength = 1;
-    int64_t  kneePreRoll = 0;   // remaining settling samples at the start level (no measurement)
+    int64_t  kneePreRoll = 0;   // remaining lead-in samples below the start level (no measurement)
     double   kneePhase = 0.0;
     float    kneeLevelGain = 0.0f;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> kneeFade { 0.0f };

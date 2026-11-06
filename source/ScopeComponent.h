@@ -21,8 +21,6 @@ public:
     {
         timePerDivParam = processor.apvts.getRawParameterValue (ParamIDs::timePerDiv);
         triggerParam    = processor.apvts.getRawParameterValue (ParamIDs::trigger);
-        srcLParam       = processor.apvts.getRawParameterValue (ParamIDs::scopeSourceL);
-        srcRParam       = processor.apvts.getRawParameterValue (ParamIDs::scopeSourceR);
 
         setOpaque (false);
         startTimerHz (60);
@@ -39,8 +37,8 @@ public:
             juce::Graphics::ScopedSaveState save (g);
             g.reduceClipRegion (plot.toNearestInt());
 
-            if (showR) drawTrace (g, plot, samplesR, traceR);
-            if (showL) drawTrace (g, plot, samplesL, traceL);
+            drawTrace (g, plot, samplesR, traceR);   // R first, so L lies on top
+            drawTrace (g, plot, samplesL, traceL);
         }
 
         g.setColour (text.withAlpha (0.6f));
@@ -65,10 +63,6 @@ private:
         const double msPerDiv = (double) timePerDivParam->load();
         const int windowLen   = juce::jlimit (2, ScopeBuffer::size / 2,
                                               (int) std::round (msPerDiv * 0.001 * numDivsX * sr));
-
-        // Always input L and R (inputs are chosen in the audio settings / the DAW)
-        showL = true;
-        showR = true;
 
         const auto& buf     = processor.scopeBuffer;
         const auto writePos = buf.getWritePos();
@@ -103,10 +97,10 @@ private:
         fracOffset = 0.0f;
         triggered = false;
 
-        if (triggerParam->load() > 0.5f && (showL || showR) && writePos > (uint64_t) windowLen + 2)
+        // (triggers on channel L)
+        if (triggerParam->load() > 0.5f && writePos > (uint64_t) windowLen + 2)
         {
-            const bool useL = showL;
-            const auto get  = [&buf, useL] (uint64_t i) { return useL ? buf.getL (i) : buf.getR (i); };
+            const auto get = [&buf] (uint64_t i) { return buf.getL (i); };
 
             // Search range: at least 100 ms or one window width back
             const auto available  = std::min<uint64_t> (writePos, (uint64_t) ScopeBuffer::size - 1);
@@ -279,9 +273,9 @@ private:
         g.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
 
         const float y = plot.getY() - 20.0f;
-        g.setColour (showL ? traceL : traceL.withAlpha (0.25f));
+        g.setColour (traceL);
         g.drawText ("L", juce::Rectangle<float> (plot.getX(), y, 20.0f, 16.0f), juce::Justification::centredLeft);
-        g.setColour (showR ? traceR : traceR.withAlpha (0.25f));
+        g.setColour (traceR);
         g.drawText ("R", juce::Rectangle<float> (plot.getX() + 22.0f, y, 20.0f, 16.0f), juce::Justification::centredLeft);
 
         g.setFont (juce::Font (juce::FontOptions (12.0f)));
@@ -307,11 +301,11 @@ private:
         const auto peakTx = [&] (float db, int ch) { return db <= -119.0f ? fmt (db) : fmt (db + processor.inputOffsetDb (ch)); };
         const auto rmsTx  = [&] (float db, int ch) { return db <= -119.0f ? fmt (db) : fmt (db + processor.inputOffsetDb (ch) + (dbu ? 3.0103f : 0.0f)); };
 
-        g.setColour (showL ? traceL : traceL.withAlpha (0.3f));
+        g.setColour (traceL);
         g.drawText ("L   Peak " + peakTx (levelPeakL, 0) + unit + "   RMS " + rmsTx (levelRmsL, 0) + unit,
                     juce::Rectangle<float> (plot.getX(), yb, half, 16.0f), juce::Justification::centredLeft);
 
-        g.setColour (showR ? traceR : traceR.withAlpha (0.3f));
+        g.setColour (traceR);
         g.drawText ("R   Peak " + peakTx (levelPeakR, 1) + unit + "   RMS " + rmsTx (levelRmsR, 1) + unit,
                     juce::Rectangle<float> (plot.getX() + half, yb, half, 16.0f), juce::Justification::centredRight);
 
@@ -326,11 +320,9 @@ private:
 
     std::atomic<float>* timePerDivParam = nullptr;
     std::atomic<float>* triggerParam    = nullptr;
-    std::atomic<float>* srcLParam       = nullptr;
-    std::atomic<float>* srcRParam       = nullptr;
 
     std::vector<float> samplesL, samplesR;
-    bool showL = true, showR = true, triggered = false;
+    bool triggered = false;
     double currentMsPerDiv = 2.0, currentSampleRate = 48000.0;
     int   currentWindowLen = 0;
     float fracOffset = 0.0f;

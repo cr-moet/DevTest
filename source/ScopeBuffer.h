@@ -9,7 +9,7 @@
 // The audio thread writes (push), the GUI thread reads (getL/getR).
 // No locks and no memory allocation on the audio thread.
 //==============================================================================
-class ScopeBuffer
+class ScopeBuffer final
 {
 public:
     // 2^19 samples per channel: enough for a 1 s window at 192 kHz

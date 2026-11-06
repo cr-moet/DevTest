@@ -90,7 +90,7 @@ namespace NoiseTexture
 //    they "sink" when pressed; optional small LED window (lit in the accent colour)
 //  - toggle buttons are small square push buttons with an LED
 //  - group titles are dark header bars with the title in the accent colour
-//  - sliders have a scale with tick marks and a dark knob cap with an accent pointer
+//  - horizontal sliders have a scale with tick marks and a dark knob cap with an accent pointer
 //  - value boxes look like a small LED display (dark with accent digits)
 //
 // Buttons with the property "led" (button.getProperties().set ("led", true)) show
@@ -355,38 +355,6 @@ public:
         g.fillRect (sliderPos - 0.75f, cap.getY() + 1.5f, 1.5f, r - 1.0f);   // pointer
     }
 
-    // Rotary knob in the same style (ticks around, dark cap, accent pointer)
-    void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height, float sliderPos,
-                           float rotaryStartAngle, float rotaryEndAngle, juce::Slider&) override
-    {
-        using namespace DevTestColours;
-
-        const auto bounds = juce::Rectangle<float> ((float) x, (float) y, (float) width, (float) height).reduced (4.0f);
-        const float radius = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f;
-        const auto  c = bounds.getCentre();
-
-        g.setColour (text.withAlpha (0.5f));
-        for (int i = 0; i <= 10; ++i)
-        {
-            const float a = rotaryStartAngle + (rotaryEndAngle - rotaryStartAngle) * (float) i / 10.0f;
-            const auto p0 = c.getPointOnCircumference (radius * 0.82f, a);
-            const auto p1 = c.getPointOnCircumference (radius, a);
-            g.drawLine ({ p0, p1 }, 1.2f);
-        }
-
-        const float capR = radius * 0.68f;
-        g.setColour (text.darker (0.3f));
-        g.fillEllipse (juce::Rectangle<float> (2.0f * capR, 2.0f * capR).withCentre (c.translated (0.0f, 1.5f)));
-        g.setColour (text.brighter (0.25f));
-        g.fillEllipse (juce::Rectangle<float> (2.0f * capR, 2.0f * capR).withCentre (c));
-        g.setColour (text);
-        g.fillEllipse (juce::Rectangle<float> (2.0f * capR - 4.0f, 2.0f * capR - 4.0f).withCentre (c));
-
-        const float angle = rotaryStartAngle + sliderPos * (rotaryEndAngle - rotaryStartAngle);
-        g.setColour (accent);
-        g.drawLine ({ c.getPointOnCircumference (capR * 0.35f, angle), c.getPointOnCircumference (capR - 2.0f, angle) }, 2.0f);
-    }
-
     // Value box: small LED display (monospaced digits)
     static juce::Font displayFont()
     {
@@ -410,4 +378,6 @@ public:
         label->setColour (juce::Label::outlineColourId,    juce::Colours::transparentBlack);
         return label;
     }
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DevTestLookAndFeel)
 };

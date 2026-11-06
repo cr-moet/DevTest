@@ -1,6 +1,7 @@
 #pragma once
 
-#include "PluginEditor.h"   // WindowButton, colours, noise texture, look and feel
+#include "DevTestLookAndFeel.h"
+#include "WindowControls.h"
 
 //==============================================================================
 // Borderless dialog window in the DevTest style (used for the options dialogs):
@@ -122,22 +123,10 @@ private:
                 updateSize();
         }
 
-        //======================================================================
-        // Moving the window: the position follows the mouse pointer on the screen
-        // (polled while the button is held, so fast movements cannot lose it)
-        void mouseDown (const juce::MouseEvent& e) override
-        {
-            if (e.y >= titleHeight)
-                return;
-
-            dragging         = true;
-            dragStartWindow  = dialog.getScreenPosition();
-            dragStartMouse   = juce::Desktop::getMousePosition();
-            dragTimer.startTimerHz (120);
-        }
-
-        void mouseDrag (const juce::MouseEvent&) override  { updateDrag(); }
-        void mouseUp (const juce::MouseEvent&) override    { updateDrag(); dragging = false; dragTimer.stopTimer(); }
+        // The title bar moves the window
+        void mouseDown (const juce::MouseEvent& e) override  { if (e.y < titleHeight) dragger.start(); }
+        void mouseDrag (const juce::MouseEvent&) override    { dragger.update(); }
+        void mouseUp (const juce::MouseEvent&) override      { dragger.stop(); }
 
     private:
         void updateSize()
@@ -146,32 +135,14 @@ private:
             setSize (content->getWidth(), content->getHeight() + titleHeight);
         }
 
-        void updateDrag()
-        {
-            if (! dragging)
-                return;
-
-            if (! juce::ModifierKeys::getCurrentModifiersRealtime().isLeftButtonDown())
-            {
-                dragging = false;
-                dragTimer.stopTimer();
-                return;
-            }
-
-            const auto target = dragStartWindow + (juce::Desktop::getMousePosition() - dragStartMouse);
-            if (dialog.getScreenPosition() != target)
-                dialog.setTopLeftPosition (target);
-        }
-
         DevTestDialog& dialog;
         juce::String title;
         std::unique_ptr<juce::Component> content;
         WindowButton closeButton { WindowButton::Type::close, DevTestColours::accent };
         bool updating = false;
+        WindowDragger dragger { *this };
 
-        bool dragging = false;
-        juce::Point<int> dragStartWindow, dragStartMouse;
-        juce::TimedCallback dragTimer { [this] { updateDrag(); } };
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Frame)
     };
 
     //==========================================================================

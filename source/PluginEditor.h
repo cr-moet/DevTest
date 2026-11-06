@@ -7,6 +7,7 @@
 #include "SweepComponent.h"
 #include "AttRelComponent.h"
 #include "DevTestLookAndFeel.h"
+#include "WindowControls.h"
 
 using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
 using ComboAttachment  = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
@@ -73,6 +74,22 @@ namespace UiHelpers
         slider.updateText();
     }
 
+    // Red START / STOP button of a test page
+    inline void setupStartButton (juce::Component& parent, juce::TextButton& button)
+    {
+        button.setColour (juce::TextButton::buttonColourId,  DevTestColours::accent);
+        button.setColour (juce::TextButton::textColourOffId, DevTestColours::background);
+        parent.addAndMakeVisible (button);
+    }
+
+    // Before a test starts and when leaving Scope/FFT: the signal generator is switched
+    // off, so it does not come back after the test
+    inline void switchGeneratorOff (juce::AudioProcessorValueTreeState& apvts)
+    {
+        if (auto* genOn = apvts.getParameter (ParamIDs::genOn))
+            genOn->setValueNotifyingHost (0.0f);
+    }
+
     inline void setupCombo (juce::Component& parent, juce::ComboBox& box,
                             juce::AudioProcessorValueTreeState& apvts, const juce::String& paramID)
     {
@@ -101,6 +118,8 @@ private:
 
     std::unique_ptr<SliderAttachment> timeAttach;
     std::unique_ptr<ButtonAttachment> triggerAttach;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ScopePage)
 };
 
 //==============================================================================
@@ -119,6 +138,8 @@ private:
     juce::ComboBox sizeBox, windowBox, avgBox, rangeBox, maxFreqBox;
 
     std::unique_ptr<ComboAttachment> sizeAttach, windowAttach, avgAttach, rangeAttach, maxFreqAttach;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FftPage)
 };
 
 //==============================================================================
@@ -148,6 +169,8 @@ private:
 
     std::unique_ptr<ComboAttachment>  waveAttach, outputAttach;
     std::unique_ptr<SliderAttachment> freqAttach, durationAttach;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (KneePage)
 };
 
 //==============================================================================
@@ -188,6 +211,8 @@ private:
                                       intervalAttach, averagesAttach;
     std::unique_ptr<SliderAttachment> durationAttach, levelAttach;
     std::unique_ptr<ButtonAttachment> normAttach, continuousAttach;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SweepPage)
 };
 
 //==============================================================================
@@ -216,59 +241,8 @@ private:
 
     std::unique_ptr<SliderAttachment> freqAttach, len1Attach, level1Attach, len2Attach, level2Attach;
     std::unique_ptr<ComboAttachment>  outputAttach;
-};
 
-//==============================================================================
-// Small buttons for the standalone window: options (three dots), minimise, close
-//==============================================================================
-class WindowButton final : public juce::Button
-{
-public:
-    enum class Type { options, minimise, close };
-
-    WindowButton (Type t, juce::Colour c)
-        : juce::Button (t == Type::options ? "Options" : (t == Type::minimise ? "Minimise" : "Close")),
-          type (t), colour (c)
-    {
-        setTooltip (getName());
-        setMouseCursor (juce::MouseCursor::PointingHandCursor);
-    }
-
-    void paintButton (juce::Graphics& g, bool highlighted, bool down) override
-    {
-        const auto area = getLocalBounds().toFloat().reduced (1.0f);
-
-        if (highlighted || down)
-        {
-            g.setColour (colour.withAlpha (down ? 0.18f : 0.10f));
-            g.fillRoundedRectangle (area, 3.0f);
-        }
-
-        g.setColour (colour);
-        const auto c = area.getCentre();
-        const float s = juce::jmin (area.getWidth(), area.getHeight()) * 0.28f;   // half size of the symbol
-
-        switch (type)
-        {
-            case Type::options:   // three dots on top of each other
-                for (int i = -1; i <= 1; ++i)
-                    g.fillEllipse (juce::Rectangle<float> (2.6f, 2.6f).withCentre ({ c.x, c.y + (float) i * s * 1.1f }));
-                break;
-
-            case Type::minimise:
-                g.fillRect (juce::Rectangle<float> (2.0f * s, 1.6f).withCentre ({ c.x, c.y + s * 0.8f }));
-                break;
-
-            case Type::close:
-                g.drawLine (c.x - s, c.y - s, c.x + s, c.y + s, 1.6f);
-                g.drawLine (c.x - s, c.y + s, c.x + s, c.y - s, 1.6f);
-                break;
-        }
-    }
-
-private:
-    Type type;
-    juce::Colour colour;
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AttRelPage)
 };
 
 //==============================================================================
@@ -287,15 +261,15 @@ public:
     void setWindowControls (std::function<void()> onClose, std::function<void()> onMinimise,
                             std::function<void()> onAudioSettings);
 
-    // Standalone: true for the part of the header that moves the window
-    // (title bar area without the window buttons)
-    bool isCaptionArea (juce::Point<int> position) const;
-
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
 
 private:
+    // Standalone: true for the part of the header that moves the window
+    // (title bar area without the window buttons)
+    bool isCaptionArea (juce::Point<int> position) const;
+
     void showPage (int index);
     void switchPage (int index);   // tab clicked: stops generator / tests, see .cpp
     void layoutTitle();
@@ -344,13 +318,7 @@ private:
     WindowButton minimiseButton { WindowButton::Type::minimise, DevTestColours::text };
     WindowButton closeButton    { WindowButton::Type::close,    DevTestColours::accent };
     bool hasWindowControls = false;
-    // Moving the borderless window: the position is taken directly from the mouse
-    // pointer on the screen (polled while the button is held), so the window can
-    // never "lose" the mouse, even with fast movements
-    void updateWindowDrag();
-    bool draggingWindow = false;
-    juce::Point<int> dragStartWindowPos, dragStartMouse;   // screen coordinates
-    juce::TimedCallback dragTimer { [this] { updateWindowDrag(); } };
+    WindowDragger windowDragger { *this };   // moves the borderless standalone window
 
     // Program name in a framed box (text is drawn as a path so it can be centred exactly)
     juce::Path titlePath;

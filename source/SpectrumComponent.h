@@ -6,7 +6,7 @@
 #include "DevTestLookAndFeel.h"
 
 //==============================================================================
-// FFT spectrum of both channels (same sources as the scope: Channel L / R).
+// FFT spectrum of both inputs (L and R, the same signals as the scope).
 // Levels are calibrated to dBFS: a sine with a -12 dBFS peak shows up as a
 // line at -12 dB (most accurate with the Flat-Top window).
 // The component is transparent so the editor's background texture shows through.
@@ -23,8 +23,6 @@ public:
         avgParam    = processor.apvts.getRawParameterValue (ParamIDs::fftAverage);
         rangeParam  = processor.apvts.getRawParameterValue (ParamIDs::fftRange);
         maxFreqParam = processor.apvts.getRawParameterValue (ParamIDs::fftMaxFreq);
-        srcLParam   = processor.apvts.getRawParameterValue (ParamIDs::scopeSourceL);
-        srcRParam   = processor.apvts.getRawParameterValue (ParamIDs::scopeSourceR);
 
         setOpaque (false);
         startTimerHz (30);
@@ -41,8 +39,8 @@ public:
             juce::Graphics::ScopedSaveState save (g);
             g.reduceClipRegion (plot.toNearestInt());
 
-            if (showR) drawSpectrum (g, plot, dbR, traceR, processor.inputOffsetDb (1));
-            if (showL) drawSpectrum (g, plot, dbL, traceL, processor.inputOffsetDb (0));
+            drawSpectrum (g, plot, dbR, traceR, processor.inputOffsetDb (1));   // R first, so L lies on top
+            drawSpectrum (g, plot, dbL, traceL, processor.inputOffsetDb (0));
         }
 
         g.setColour (text.withAlpha (0.6f));
@@ -187,10 +185,6 @@ private:
             lastSampleRate = sampleRate;
         }
 
-        // Always input L and R (inputs are chosen in the audio settings / the DAW)
-        showL = true;
-        showR = true;
-
         const auto writePos = processor.scopeBuffer.getWritePos();
         if (writePos < (uint64_t) fftSize + 1)
             return;
@@ -329,12 +323,12 @@ private:
         const float y = plot.getY() - 20.0f;
 
         g.setFont (juce::Font (juce::FontOptions (12.0f)));
-        g.setColour (showL ? traceL : traceL.withAlpha (0.3f));
+        g.setColour (traceL);
         g.drawText ("L  Peak " + fmtPeak (peakFreqL, peakLevelL, 0),
                     juce::Rectangle<float> (plot.getX(), y, plot.getWidth() * 0.5f, 16.0f),
                     juce::Justification::centredLeft);
 
-        g.setColour (showR ? traceR : traceR.withAlpha (0.3f));
+        g.setColour (traceR);
         g.drawText ("R  Peak " + fmtPeak (peakFreqR, peakLevelR, 1),
                     juce::Rectangle<float> (plot.getCentreX(), y, plot.getWidth() * 0.5f, 16.0f),
                     juce::Justification::centredRight);
@@ -359,8 +353,6 @@ private:
     std::atomic<float>* avgParam    = nullptr;
     std::atomic<float>* rangeParam  = nullptr;
     std::atomic<float>* maxFreqParam = nullptr;
-    std::atomic<float>* srcLParam   = nullptr;
-    std::atomic<float>* srcRParam   = nullptr;
 
     std::unique_ptr<juce::dsp::FFT> fft;
     int fftOrder = 0, fftSize = 0, windowIndex = -1;
@@ -369,7 +361,6 @@ private:
     bool  firstFrame = true;
 
     double sampleRate = 48000.0, lastSampleRate = 0.0;
-    bool showL = true, showR = true;
     float peakFreqL = 0.0f, peakLevelL = -200.0f, peakFreqR = 0.0f, peakLevelR = -200.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SpectrumComponent)

@@ -2,8 +2,8 @@
 //
 // Instead of JUCE's default standalone window (grey frame, title bar and an
 // "Options" button) DevTest uses a borderless window that shows only the plugin
-// editor. Close, minimise and the options menu (audio/MIDI settings) are drawn
-// by the editor itself, in the DevTest colours.
+// editor. Close, minimise and the options menu (audio settings, calibration) are
+// drawn by the editor itself, in the DevTest colours.
 //
 // Enabled with JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1 in CMakeLists.txt.
 // JUCE's StandalonePluginHolder still does the audio device handling and saves
@@ -15,7 +15,6 @@
 
 // JUCE's standalone helper classes (StandalonePluginHolder: audio device, settings)
 #include <juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h>
-
 
 #if JucePlugin_Build_Standalone && JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP
 
@@ -80,6 +79,8 @@ namespace
         juce::AudioDeviceSelectorComponent deviceSelector;
         juce::ToggleButton muteButton { "Mute audio input (feedback loop)" };
         bool isResizing = false;
+
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioSettingsComponent)
     };
 
     //==========================================================================
@@ -122,6 +123,10 @@ namespace
 
         ~DevTestWindow() override
         {
+            // An open settings dialog refers to the audio device handling: close it first
+            if (settingsDialog != nullptr)
+                delete settingsDialog.getComponent();
+
             settings.setValue ("windowX", getX());
             settings.setValue ("windowY", getY());
 
@@ -146,18 +151,27 @@ namespace
         // Audio settings in the DevTest dialog (instead of the standard Windows dialog)
         void showAudioSettings()
         {
+            if (settingsDialog != nullptr)
+            {
+                settingsDialog->toFront (true);
+                return;
+            }
+
             int maxInputs = 2, maxOutputs = 2;
             if (auto* bus = holder.processor->getBus (true, 0))   maxInputs  = juce::jmax (0, bus->getDefaultLayout().size());
             if (auto* bus = holder.processor->getBus (false, 0))  maxOutputs = juce::jmax (0, bus->getDefaultLayout().size());
 
-            DevTestDialog::show ("Audio Settings", std::make_unique<AudioSettingsComponent> (holder, maxInputs, maxOutputs), this);
+            settingsDialog = DevTestDialog::show ("Audio Settings",
+                                                  std::make_unique<AudioSettingsComponent> (holder, maxInputs, maxOutputs), this);
         }
-
 
     private:
         juce::StandalonePluginHolder& holder;
         juce::PropertySet& settings;
         std::unique_ptr<juce::AudioProcessorEditor> editor;
+        juce::Component::SafePointer<juce::Component> settingsDialog;
+
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DevTestWindow)
     };
 
     //==========================================================================
@@ -231,6 +245,8 @@ namespace
         juce::ApplicationProperties appProperties;
         std::unique_ptr<juce::StandalonePluginHolder> holder;
         std::unique_ptr<DevTestWindow> window;
+
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DevTestStandaloneApp)
     };
 }
 
