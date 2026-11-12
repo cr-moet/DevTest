@@ -13,12 +13,14 @@
 // the Hilbert transform (analytic signal): this gives the amplitude for every
 // single sample, without an averaging window and therefore without a time
 // offset. Their ratio is the gain of the device over time (in dB), corrected
-// for the loop latency measured with a click before the bursts. The 63 % / 90 %
+// for the loop latency measured with a click after the bursts. The 63 % / 90 %
 // points are interpolated between samples. The analysis runs on a background
 // thread.
 //
 //  - Attack:  at the start of burst 1 the gain drops from its start value to
-//             the compressed value.
+//             the compressed value. With a 0 ms attack it is compressed from the
+//             first sample on: no step, but the release shows the compression, and
+//             the attack is given as 0 ms (instant).
 //  - Release: at the change to the quieter burst 2 the gain recovers again.
 //
 // The display can be zoomed with the mouse wheel (around the mouse position),
@@ -123,6 +125,8 @@ private:
         std::vector<float> gainDb;          // gain over time (one value per sample, NaN = invalid)
 
         bool  hasAttack = false, hasRelease = false;
+        bool  attackInstant = false;        // already compressed at the first sample (0 ms)
+        bool  attackAtLeast = false;        // the gain change comes from the release (a lower limit)
         float attack63 = 0.0f, attack90 = 0.0f, attackChange = 0.0f;     // ms, ms, dB
         float release63 = 0.0f, release90 = 0.0f, releaseChange = 0.0f;  // ms, ms, dB
         juce::String attackNote, releaseNote;
@@ -345,17 +349,37 @@ private:
                     end = settled1;  limit = rec.burst2Start - guard;
                 }
 
+                // Fast attack (down to 0 ms): the gain may already be (partly) compressed at
+                // the first samples, so the step starts too low or is not visible at all.
+                // The release shows the gain without (or with less) compression: if the gain
+                // recovers at the quieter burst 2 above the start value, that is the reference
+                // (the change is then at least this large, burst 2 may still be compressed).
+                const bool recovers = ! secondLouder && r.releaseEvent >= 0 && ! std::isnan (settled1)
+                                      && ! std::isnan (settled2) && settled2 - settled1 >= 0.5f;
+                const bool fromRelease = recovers && start > -999.0f && settled2 > start + 0.5f;
+                if (fromRelease)
+                    start = settled2;
+
                 ch->attackChange = end - start;
 
                 if (std::isnan (start) || std::isnan (end) || start < -999.0f)
                     ch->attackNote = "no signal";
                 else if (std::abs (end - start) < 0.5f)
-                    ch->attackNote = "no gain change (below threshold or faster than ~0.1 ms)";
+                    ch->attackNote = secondLouder ? "no gain change (below threshold or faster than ~0.1 ms)"
+                                                  : "no gain change: below threshold, or 0 ms attack (to tell them apart, set burst 2 below the threshold)";
                 else
                 {
                     ch->attack63  = timeToFraction (g, r.attackEvent, limit, start, end, 0.632f, rec.sampleRate);
                     ch->attack90  = timeToFraction (g, r.attackEvent, limit, start, end, 0.9f,   rec.sampleRate);
                     ch->hasAttack = true;
+
+                    // Already at 90 % within the first two samples: instant (0 ms)
+                    if (fromRelease && ch->attack90 <= (float) (2000.0 / rec.sampleRate))
+                    {
+                        ch->attackInstant = true;
+                        ch->attack63 = ch->attack90 = 0.0f;
+                    }
+                    ch->attackAtLeast = fromRelease;
                 }
             }
 
@@ -718,9 +742,10 @@ private:
             g.setColour (c == 0 ? traceL : traceR);
 
             juce::String line = c == 0 ? "L   " : "R   ";
-            line << "Attack  " << (ch.hasAttack ? "63 %: " + fmtMs (ch.attack63) + "   90 %: " + fmtMs (ch.attack90)
-                                                      + "   (GR " + juce::String (-ch.attackChange, 1) + " dB)"
-                                                : ch.attackNote);
+            const auto gr = "   (GR " + juce::String (ch.attackAtLeast ? "at least " : "") + juce::String (-ch.attackChange, 1) + " dB)";
+            line << "Attack  " << (ch.attackInstant ? "0 ms (instant: compressed from the first sample)" + gr
+                                   : ch.hasAttack   ? "63 %: " + fmtMs (ch.attack63) + "   90 %: " + fmtMs (ch.attack90) + gr
+                                                    : ch.attackNote);
             g.drawText (line, area.withY (area.getY() + 18.0f + 36.0f * (float) c).withHeight (16.0f), juce::Justification::centredLeft);
 
             juce::String line2 = "     Release ";
