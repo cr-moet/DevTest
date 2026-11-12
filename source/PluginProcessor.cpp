@@ -518,14 +518,20 @@ bool AudioPluginAudioProcessor::startBurstTest()
     rec.amp2       = rec.amp1 * arPercentParam->load() / 100.0f;
     rec.latency    = 0;
 
-    // Timeline: click (latency), silence, burst 1, burst 2, fade-out, tail
-    burstClickLength = (int64_t) (0.2 * sr);
+    // Timeline: silence, burst 1, burst 2, fade-out, silence, click (latency), tail.
+    // The click comes AFTER the bursts: a click before them would already make the
+    // device under test compress (and still release during burst 1), which falsifies
+    // the attack. The recording is evaluated afterwards, so the latency is known in time.
+    // Up to 1 s loop latency: the burst return has ended before the click, and the
+    // click returns within its window.
+    constexpr double maxLatency = 1.0;
     burstFadeLength  = (int64_t) (0.002 * sr);
-    rec.burst1Start  = burstClickLength + (int64_t) (0.3 * sr);
+    rec.burst1Start  = (int64_t) (0.3 * sr);
     rec.burst2Start  = rec.burst1Start + (int64_t) (arLen1Param->load() * 0.001 * sr);
     rec.burst2End    = rec.burst2Start + (int64_t) (arLen2Param->load() * 0.001 * sr);
+    burstClickStart  = rec.burst2End + burstFadeLength + (int64_t) (maxLatency * sr);
 
-    const auto total = (size_t) (rec.burst2End + burstFadeLength + (int64_t) (0.25 * sr));
+    const auto total = (size_t) (burstClickStart + (int64_t) (maxLatency * sr));
 
     // Allocate here (GUI thread), never on the audio thread
     rec.sent.assign (total, 0.0f);
@@ -1104,17 +1110,17 @@ float AudioPluginAudioProcessor::processBurstSample (float l, float r, double sr
     float burstTone = 0.0f;
     auto& rec = burstRecording;
 
-    if (arPos < burstClickLength)
+    if (arPos >= burstClickStart)
     {
-        // Click for the latency measurement: the strongest returned sample
-        // after the click gives the loop latency
-        burstTone = arPos == 0 ? rec.amp1 : 0.0f;
+        // Click for the latency measurement (after the bursts): the strongest
+        // returned sample after the click gives the loop latency
+        burstTone = arPos == burstClickStart ? rec.amp1 : 0.0f;
 
         const float v = std::abs (l) + std::abs (r);
         if (v > arClickPeak && v > 1.0e-4f * rec.amp1)
         {
             arClickPeak = v;
-            rec.latency = (int) arPos;
+            rec.latency = (int) (arPos - burstClickStart);
         }
     }
     else if (arPos >= rec.burst1Start && arPos < rec.burst2End + burstFadeLength)

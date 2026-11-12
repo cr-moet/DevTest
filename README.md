@@ -38,7 +38,7 @@ one window. DevTest runs as a **standalone application** (Windows, ASIO) and as 
 | **Att/Rel** | Attack and release time of a compressor with two sine bursts |
 
 - **Signal generator** (Scope and FFT): sine, saw, triangle, square (band-limited), 20 Hz – 20 kHz, −60 … 0 dBFS
-- **Latency compensation**: Knee, Sweep and Att/Rel measure the loop latency (interface + device) with a click before every test, so the results do not depend on buffer sizes
+- **Latency compensation**: Knee, Sweep and Att/Rel measure the loop latency (interface + device) with a click (Knee and Sweep before the test, Att/Rel after the bursts, so the click cannot trigger the compressor before the measurement), so the results do not depend on buffer sizes
 - **dBFS or dBu**: all level displays can be switched to dBu after a calibration of the inputs and outputs
 - **Both channels at once**: L and R are always measured together (L red, R black)
 - Hardware-style user interface, freely resizable window

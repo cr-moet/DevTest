@@ -85,6 +85,180 @@ namespace NoiseTexture
 }
 
 //==============================================================================
+// 14 segment LED display (digits, letters and a few symbols), drawn with lit
+// segments over the faint unlit ones, slightly slanted as real LED displays.
+//
+//   ---A---        H, J, K: upper diagonal / vertical / diagonal
+//  |\  |  /|       L, M, N: lower diagonal / vertical / diagonal
+//  F H J K B       G1, G2: middle left / right
+//  |  \|/  |
+//   -G1 G2-
+//  |  /|\  |
+//  E L M N C
+//  |/  |  \|
+//   ---D---  .
+//==============================================================================
+namespace LedSegments
+{
+    enum : uint16_t { A = 1, B = 2, C = 4, D = 8, E = 16, F = 32, G1 = 64, G2 = 128,
+                      H = 256, J = 512, K = 1024, L = 2048, M = 4096, N = 8192 };
+
+    inline uint16_t glyph (juce::juce_wchar c) noexcept
+    {
+        switch (c)
+        {
+            case '0': return A|B|C|D|E|F;          case '1': return B|C;
+            case '2': return A|B|G1|G2|E|D;        case '3': return A|B|C|D|G2;
+            case '4': return F|G1|G2|B|C;          case '5': return A|F|G1|G2|C|D;
+            case '6': return A|F|E|D|C|G1|G2;      case '7': return A|B|C;
+            case '8': return A|B|C|D|E|F|G1|G2;    case '9': return A|B|C|D|F|G1|G2;
+            case 'A': return A|B|C|E|F|G1|G2;      case 'B': return A|B|C|D|J|M|G2;
+            case 'C': return A|D|E|F;              case 'D': return A|B|C|D|J|M;
+            case 'E': return A|D|E|F|G1;           case 'F': return A|E|F|G1;
+            case 'G': return A|C|D|E|F|G2;         case 'H': return B|C|E|F|G1|G2;
+            case 'I': return A|D|J|M;              case 'J': return B|C|D|E;
+            case 'K': return E|F|G1|K|N;           case 'L': return D|E|F;
+            case 'M': return B|C|E|F|H|K;          case 'N': return B|C|E|F|H|N;
+            case 'O': return A|B|C|D|E|F;          case 'P': return A|B|E|F|G1|G2;
+            case 'Q': return A|B|C|D|E|F|N;        case 'R': return A|B|E|F|G1|G2|N;
+            case 'S': return A|C|D|F|G1|G2;        case 'T': return A|J|M;
+            case 'U': return B|C|D|E|F;            case 'V': return E|F|L|K;
+            case 'W': return B|C|E|F|L|N;          case 'X': return H|K|L|N;
+            case 'Y': return H|K|M;                case 'Z': return A|D|K|L;
+            case 'b': return C|D|E|F|G1|G2;        case 'c': return D|E|G1|G2;
+            case 'd': return B|C|D|E|G1|G2;        case 'h': return C|E|F|G1|G2;
+            case 'i': return M;                    case 'l': return E|F;
+            case 'm': return C|E|G1|G2|M;          case 'n': return C|E|G1|G2;
+            case 'o': return C|D|E|G1|G2;          case 'r': return E|G1;
+            case 't': return D|E|F|G1;             case 'u': return C|D|E;
+            case '-': return G1|G2;                case '+': return G1|G2|J|M;
+            case '%': return F|C|K|L;        case '/': return K|L;
+            case '\\': return H|N;                 case '(': case '<': return K|N;
+            case ')': case '>': return H|L;        case '=': return G1|G2|D;
+            case '*': return G1|G2|H|J|K|L|M|N;    case '_': return D;
+            case '\'': return J;                   case '"': return F|J;
+            case '|': return J|M;                  case 0xb0: return A|B|F|G1|G2;   // degree
+            default: break;
+        }
+        if (c >= 'a' && c <= 'z')
+            return glyph (c - 'a' + 'A');
+        return 0;
+    }
+
+    // One character cell (top left x, y; height h); 'point' lights the decimal point
+    inline void drawCell (juce::Graphics& g, float x, float y, float h, uint16_t mask, bool point, bool colon, juce::Colour lit)
+    {
+        const float w = h * 0.62f, t = h * 0.12f, gap = t * 0.14f, skew = 0.07f;
+        const auto pt = [&] (float px, float py) { return juce::Point<float> (x + px + (h - py) * skew, y + py); };
+        const auto bar = [&] (float x0, float y0, float x1, float y1)   // horizontal or vertical, pointed ends
+        {
+            juce::Path p;
+            if (juce::exactlyEqual (y0, y1))
+            {
+                p.startNewSubPath (pt (x0 + gap, y0)); p.lineTo (pt (x0 + gap + t * 0.5f, y0 - t * 0.5f)); p.lineTo (pt (x1 - gap - t * 0.5f, y0 - t * 0.5f));
+                p.lineTo (pt (x1 - gap, y0)); p.lineTo (pt (x1 - gap - t * 0.5f, y0 + t * 0.5f)); p.lineTo (pt (x0 + gap + t * 0.5f, y0 + t * 0.5f));
+            }
+            else
+            {
+                p.startNewSubPath (pt (x0, y0 + gap)); p.lineTo (pt (x0 + t * 0.5f, y0 + gap + t * 0.5f)); p.lineTo (pt (x0 + t * 0.5f, y1 - gap - t * 0.5f));
+                p.lineTo (pt (x0, y1 - gap)); p.lineTo (pt (x0 - t * 0.5f, y1 - gap - t * 0.5f)); p.lineTo (pt (x0 - t * 0.5f, y0 + gap + t * 0.5f));
+            }
+            p.closeSubPath();
+            return p;
+        };
+        const auto diagonal = [&] (float x0, float y0, float x1, float y1)
+        {
+            const auto a = pt (x0, y0), b = pt (x1, y1);
+            const auto d = (b - a) * (1.0f / a.getDistanceFrom (b)) * (gap + t * 0.75f);
+            juce::Path line, p;
+            line.startNewSubPath (a + d);
+            line.lineTo (b - d);
+            juce::PathStrokeType (t * 0.65f, juce::PathStrokeType::mitered, juce::PathStrokeType::butt).createStrokedPath (p, line);
+            return p;
+        };
+
+        const float l = t * 0.5f, r = w - t * 0.5f, cx = w * 0.5f, top = t * 0.5f, mid = h * 0.5f, bottom = h - t * 0.5f;
+        const juce::Path segments[14] {
+            bar (l, top, r, top),            bar (r, top, r, mid),           bar (r, mid, r, bottom),         bar (l, bottom, r, bottom),
+            bar (l, mid, l, bottom),         bar (l, top, l, mid),           bar (l, mid, cx, mid),           bar (cx, mid, r, mid),
+            diagonal (l, top, cx, mid),      bar (cx, top, cx, mid),         diagonal (r, top, cx, mid),
+            diagonal (l, bottom, cx, mid),   bar (cx, mid, cx, bottom),      diagonal (r, bottom, cx, mid) };
+
+        for (int i = 0; i < 14; ++i)
+        {
+            g.setColour ((mask >> i) & 1 ? lit : lit.withMultipliedAlpha (0.06f));
+            g.fillPath (segments[i]);
+        }
+        const float dot = t * 1.1f;
+        g.setColour (point ? lit : lit.withMultipliedAlpha (0.08f));
+        g.fillRect (juce::Rectangle<float> (dot, dot).withCentre (pt (w + t * 0.9f, bottom)));
+        if (colon)
+            for (float py : { h * 0.3f, h * 0.7f })
+            {
+                g.setColour (lit);
+                g.fillRect (juce::Rectangle<float> (dot, dot).withCentre (pt (cx, py)));
+            }
+    }
+
+    // Text in 'area' with the given justification; the height adapts to fit the width
+    inline void draw (juce::Graphics& g, juce::Rectangle<float> area, const juce::String& text,
+                      juce::Justification justification, juce::Colour lit)
+    {
+        struct Cell { uint16_t mask; bool point, colon, space; };
+        juce::Array<Cell> cells;
+        for (auto c : text.trim())
+        {
+            if ((c == '.' || c == ',') && ! cells.isEmpty() && ! cells.getReference (cells.size() - 1).point && ! cells.getLast().space)
+                cells.getReference (cells.size() - 1).point = true;
+            else
+                cells.add ({ glyph (c), c == '.' || c == ',', c == ':', c == ' ' });
+        }
+
+        float h = juce::jmin (area.getHeight() * 0.7f, 18.0f);
+        const auto widthFor = [&cells] (float height)
+        {
+            float total = 0.0f;
+            for (const auto& cell : cells)
+                total += height * (cell.space ? 0.4f : 0.84f);
+            return total;
+        };
+        const float available = area.getWidth() - 8.0f;
+        if (widthFor (h) > available)
+            h *= available / widthFor (h);
+
+        const float total = widthFor (h);
+        float x = justification.testFlags (juce::Justification::left)  ? area.getX() + 4.0f
+                : justification.testFlags (juce::Justification::right) ? area.getRight() - 4.0f - total
+                                                                         : area.getCentreX() - total * 0.5f;
+        const float y = area.getCentreY() - h * 0.5f;
+        for (const auto& cell : cells)
+        {
+            if (! cell.space)
+                drawCell (g, x, y, h, cell.mask, cell.point, cell.colon, lit);
+            x += h * (cell.space ? 0.4f : 0.84f);
+        }
+    }
+
+    // Recessed black display window: shadow at the top, light lower edge
+    inline void drawWindow (juce::Graphics& g, juce::Rectangle<float> r, juce::Colour face)
+    {
+        g.setColour (face);
+        g.fillRect (r);
+        g.setGradientFill (juce::ColourGradient (juce::Colours::black.withAlpha (0.8f), r.getTopLeft(),
+                                                 juce::Colours::transparentBlack, r.getTopLeft().translated (0.0f, 5.0f), false));
+        g.fillRect (r.withHeight (5.0f));
+        g.setGradientFill (juce::ColourGradient (juce::Colours::black.withAlpha (0.5f), r.getTopLeft(),
+                                                 juce::Colours::transparentBlack, r.getTopLeft().translated (4.0f, 0.0f), false));
+        g.fillRect (r.withWidth (4.0f));
+        g.setColour (juce::Colours::black.withAlpha (0.6f));
+        g.drawLine (r.getX(), r.getY() + 0.5f, r.getRight(), r.getY() + 0.5f, 1.0f);
+        g.setColour (juce::Colours::white.withAlpha (0.6f));
+        g.drawLine (r.getX(), r.getBottom() + 0.5f, r.getRight() + 1.0f, r.getBottom() + 0.5f, 1.0f);
+        g.drawLine (r.getRight() + 0.5f, r.getY(), r.getRight() + 0.5f, r.getBottom() + 1.0f, 1.0f);
+    }
+}
+
+//==============================================================================
 // Hardware-style look in the DevTest colours:
 //  - buttons are flat (2D) but hint at depth: darker lower edge, light upper edge,
 //    they "sink" when pressed; optional small LED window (lit in the accent colour)
@@ -367,6 +541,22 @@ public:
             return displayFont();   // value box of a slider
 
         return label.getFont();
+    }
+
+    // Labels with the dark display background (value boxes, calibration displays):
+    // recessed LED window with segment characters, all other labels as usual
+    void drawLabel (juce::Graphics& g, juce::Label& label) override
+    {
+        if (label.findColour (juce::Label::backgroundColourId) != DevTestColours::text)
+        {
+            juce::LookAndFeel_V4::drawLabel (g, label);
+            return;
+        }
+        const auto r = label.getLocalBounds().toFloat().withTrimmedRight (1.0f).withTrimmedBottom (1.0f);
+        LedSegments::drawWindow (g, r, DevTestColours::text);
+        if (! label.isBeingEdited())
+            LedSegments::draw (g, r, label.getText(), label.getJustificationType(),
+                               DevTestColours::accent.withMultipliedAlpha (label.isEnabled() ? 1.0f : 0.5f));
     }
 
     juce::Label* createSliderTextBox (juce::Slider& slider) override

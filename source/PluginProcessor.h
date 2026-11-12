@@ -87,7 +87,7 @@ struct BurstRecording
     float   freq = 1000.0f;
     float   amp1 = 0.5f, amp2 = 0.125f;       // linear amplitudes of burst 1 and burst 2
     int64_t burst1Start = 0, burst2Start = 0, burst2End = 0;
-    int     latency = 0;                      // loop latency in samples (from the click)
+    int     latency = 0;                      // loop latency in samples (from the click after the bursts)
 };
 
 // Fixed sweep range of the knee test
@@ -358,7 +358,7 @@ private:
     std::atomic<uint32_t> burstRunIdShared { 0 };
 
     BurstRecording burstRecording;
-    int64_t burstClickLength = 0, burstFadeLength = 0;
+    int64_t burstClickStart = 0, burstFadeLength = 0;
 
     // Audio thread state
     bool    arActive = false;
